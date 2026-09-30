@@ -52,7 +52,7 @@ def search():
 
     for a in extracted_a_level_text:
         href = a.get("href","")
-        if href.startswith("/programmes-and-qualifications/cambridge-international-as-and-a-level-"):
+        if href.startswith("/programmes-and-qualifications/cambridge-international-as-"):
             code_match = re.search(code_pattern,a.get_text(strip=True))
             if code_match:
                 code = code_match.group()
