@@ -148,5 +148,6 @@ if __name__ == "__main__":
     print("This is a test\n")
     pdf = input("Please paste in the pdf u want to extract the metadata from:\n")
     text = reader.read_file(pdf)
-
+    store=scraper.search()
+    scraper.generate_file(store)
     print(meta_extract(text))
