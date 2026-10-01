@@ -1,5 +1,10 @@
 import re
 import reader
+import json
+import scraper
+
+with open("data/subjects.json","r",encoding="utf-8") as file:
+    subjects:dict = json.load(file)
 
 def meta_extract(extracted_pdf):
 
@@ -134,6 +139,8 @@ def meta_extract(extracted_pdf):
                     metadata["session"] = session
                 metadata["year"] = new_year_session.group(2).strip()
 
+    temp:dict = subjects.get(metadata["qualification"],{})
+    metadata["subject_name"] = temp.get(metadata["subject_code"])
 
     return metadata
 
@@ -141,4 +148,5 @@ if __name__ == "__main__":
     print("This is a test\n")
     pdf = input("Please paste in the pdf u want to extract the metadata from:\n")
     text = reader.read_file(pdf)
+
     print(meta_extract(text))
