@@ -1,5 +1,15 @@
 import re
 import reader
+import json
+import scraper
+import os
+
+if not os.path.exists("data/subjects.json"):
+    resultsearch = scraper.search()
+    scraper.generate_file(resultsearch)
+
+with open("data/subjects.json","r",encoding="utf-8") as file:
+    subjects:dict = json.load(file)
 
 def meta_extract(extracted_pdf):
 
@@ -36,7 +46,7 @@ def meta_extract(extracted_pdf):
         # Qualifcation Extraction
         IGCSE_pattern = r"IGCSE|General Certificate of Secondary Education"
         O_level_pattern = r"O Level|Ordinary Level"
-        AS_level_pattern = r"Cambridge International AS Level"
+        AS_level_pattern = r"Cambridge International AS Level|Advanced Subsidiary Level(?! and)"
         AS_ALevel_pattern = r"AS & A Level|Advanced Subsidiary and Advanced Level|Advanced Subsidiary Level and Advanced Level|International Advanced Level"
 
         if re.search(IGCSE_pattern,extracted_pdf):
@@ -72,7 +82,23 @@ def meta_extract(extracted_pdf):
             metadata["year"] = "20" + code_splitted[4]
 
         else:
-            print("There was no code in this exam.")
+            code_pattern = r"(\d{4})/(\d)(\d)"
+            code_search = re.search(code_pattern,extracted_pdf)
+            year_session_patt = r"(February/March|May/June|October/November|March|June)\s*(\d{4})"
+            year_session_search = re.search(year_session_patt,extracted_pdf)
+
+            if code_search:
+                metadata["subject_code"] = code_search.group(1)
+                metadata["paper"] = code_search.group(2)
+                metadata["variant"] = code_search.group(3)
+            if year_session_search:
+                metadata["year"] = year_session_search.group(2)
+                if year_session_search.group(1).lower() in ("june","may/june"):
+                    metadata["session"] = "May/June"
+                elif year_session_search.group(1).lower() in ("february/march","march"):
+                    metadata["session"] = "February/March"
+                elif year_session_search.group(1).lower() in "october/november":
+                    metadata["session"] = "October/November"
 
     if metadata["paper_type"] == "MS":
         # MS extraction logic
@@ -96,7 +122,13 @@ def meta_extract(extracted_pdf):
                 elif "a level" in qual_in_old:
                     metadata["qualification"] = "AS & A Level"
 
-                metadata["session"] = old_code_paperv.group(2).strip()
+                if old_code_paperv.group(2).strip().lower() in ("march","february","february/march"):
+                    metadata["session"] = "February/March"
+                elif old_code_paperv.group(2).strip().lower() in ("may","june","may/june"):
+                    metadata["session"] = "May/June"
+                elif old_code_paperv.group(2).strip().lower() in ("october","november","october/november"):
+                    metadata["session"] = "October/November"
+                
                 metadata["year"] = old_code_paperv.group(3).strip()
                 metadata["subject_code"] = old_code_paperv.group(4).strip()
                 old_pv = old_code_paperv.group(5)
@@ -134,6 +166,8 @@ def meta_extract(extracted_pdf):
                     metadata["session"] = session
                 metadata["year"] = new_year_session.group(2).strip()
 
+    temp:dict = subjects.get(metadata["qualification"],{})
+    metadata["subject_name"] = temp.get(metadata["subject_code"])
 
     return metadata
 

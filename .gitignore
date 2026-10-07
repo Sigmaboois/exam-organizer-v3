@@ -6,6 +6,10 @@ __pycache__/
 *$py.class
 *.so
 
+#Project related
+data/
+test/
+
 # Packaging / build
 build/
 dist/
