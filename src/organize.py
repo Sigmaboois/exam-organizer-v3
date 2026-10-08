@@ -1,7 +1,7 @@
-import reader 
-import parser 
-import renamer  
-import scraper 
+import src.reader as reader 
+import src.parser as parser
+import src.renamer as renamer
+import src.scraper as scraper
 
 def organize_exam(pdf_path,root_path):
 

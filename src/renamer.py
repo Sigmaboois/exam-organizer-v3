@@ -1,5 +1,5 @@
-import parser 
-import reader 
+import src.parser as parser
+import src.reader as reader 
 
 import os
 
