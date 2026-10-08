@@ -1,7 +1,7 @@
 import re 
 import reader 
 import json 
-import scraper 
+import scraper  
 import os 
  
 if not os.path.exists("data/subjects.json"): 

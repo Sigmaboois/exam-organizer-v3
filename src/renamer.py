@@ -1,10 +1,10 @@
-import parser
-import reader
+import parser 
+import reader 
 
 import os
 
-def folder_create(metadata):
-    folder_path = input("Please input the path where the exams will be assorted to:\n")
+def folder_create(metadata,folder_path):
+
     # Example: C:\Users\gasse\OneDrive\Documents\School\Exams
     folder_path = os.path.join(
     folder_path,
