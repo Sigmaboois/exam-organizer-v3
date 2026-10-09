@@ -22,6 +22,10 @@ def folder_create(metadata,folder_path):
 
 def rename(metadata,file,folder_path):
     new_name = os.path.join(folder_path,f'{metadata["subject_name"]} - Paper {metadata["paper"]} v{metadata["variant"]} {metadata["paper_type"]}.pdf')
+
+    # Never overwrite an exam that is already sorted
+    if os.path.exists(new_name):
+        raise FileExistsError(f"An exam is already sorted at: {new_name}")
     os.rename(file,new_name)
 
 
