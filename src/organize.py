@@ -7,7 +7,6 @@ def organize_exam(pdf_path,root_path):
 
     pdf_extracted = reader.read_file(pdf_path)
     metadata = parser.meta_extract(pdf_extracted)
-    subjectsfile = scraper.generate_file(scraper.search())
     folder_path = renamer.folder_create(metadata,root_path)
     renamer.rename(metadata,pdf_path,folder_path)
 
