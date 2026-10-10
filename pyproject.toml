@@ -1,0 +1,31 @@
+[project]
+name = "exam-organizer"
+version = "1.0.0"
+description = "Sort Cambridge IGCSE, O Level and AS & A Level past papers and mark schemes into tidy folders."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Gasser Elshafei" }]
+dependencies = [
+    "flet==1.0.4",
+    "flet-dropzone==0.4.0",
+    "pypdf",
+    "requests",
+    "beautifulsoup4",
+    "pypdfium2",   # renders PDF pages (answer detection, AI checking)
+    "pillow",      # compares rendered pages
+    "openpyxl",    # spreadsheet export
+]
+
+[dependency-groups]
+# Needed on your PC to run `flet run` / `flet build`, but not inside the built app
+dev = ["flet[all]==1.0.4"]
+
+[tool.flet]
+product = "Exam Organizer"
+company = "Gasser Elshafei"
+copyright = "Copyright (C) 2026 Gasser Elshafei"
+
+[tool.flet.app]
+path = "."
+exclude = ["data", "test", "build", "README.md"]

@@ -10,6 +10,9 @@ __pycache__/
 data/
 test/
 
+# Secret API key. Never commit this, the repo is public
+src/api_key.py
+
 # Packaging / build
 build/
 dist/
