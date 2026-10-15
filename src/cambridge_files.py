@@ -87,33 +87,106 @@ def describe(kind):
 # Grade thresholds: turn a mark into a grade using Cambridge's real boundaries
 # --------------------------------------------------------------------------
 
+# Used only when the threshold PDF's own header line can't be read, and only when
+# the number of columns matches what this qualification normally has.
 GRADE_LETTERS = {
-    # Letter columns in the "Component" rows, in order
     "IGCSE": ["A", "B", "C", "D", "E", "F", "G"],
     "O Level": ["A", "B", "C", "D", "E"],
     "AS": ["a", "b", "c", "d", "e"],
     "AS & A Level": ["A", "B", "C", "D", "E"],
 }
+# Cells for grades that aren't awarded on a paper: a dash, or a glyph pypdf can't decode
+_MISSING_CHARS = "-–—−‐‑~�"
+# A header row of grades: "A B C D E F G", "A C E F", "AA BB CC", "A* A B", "9 8 7 ... 1".
+# Older tables put it after "available" or "grade:" instead of on its own line.
+_GRADE = r"(?:A\*A\*|A\*|[A-G]{1,2}|[a-g]|[1-9])"
+_HEADER = re.compile(
+    rf"(?m)(?:^|available|:)[ \t]*({_GRADE}(?:[ \t]+{_GRADE}){{2,9}})(?=[ \t]*(?:$|Component\b))"
+)
+
+
+def _grade_header(text, before):
+    """The grade columns of the table header nearest above this component's row."""
+    found = None
+    for match in _HEADER.finditer(text):
+        if match.start() >= before:
+            break
+        found = match.group(1).split()
+    return found
+
+
+def _infer_grades(count, metadata):
+    name = metadata.get("subject_name") or ""
+    if count == 9 and ("9-1" in name or "9–1" in name):
+        return list("987654321")
+    usual = GRADE_LETTERS.get(metadata.get("qualification"))
+    return usual if usual and len(usual) == count else None
+
+
+def _component_values(line):
+    """
+    Max mark, then one cell per grade (None = not awarded).
+    Older PDFs leave a blank cell as an extra space, so "56  34 22 18" is 56, blank, 34, 22, 18
+    and "70 53 32 20  " ends with a blank cell.
+    """
+    line = line.lstrip(" \t")
+    if line.endswith(" "):   # the row's own closing space
+        line = line[:-1]
+    values = []
+    for token in line.split(" "):
+        if token.isdigit():
+            values.append(int(token))
+        elif token.lower() in ("", "n/a", "na") or all(ch in _MISSING_CHARS for ch in token):
+            values.append(None)
+        else:
+            break
+    return values
+
+
+def _match_columns(letters, cells):
+    """Pair grades with cells, or None if the columns can't be lined up for certain."""
+    if len(cells) == len(letters):
+        return list(zip(letters, cells))
+    trimmed = list(cells)
+    while trimmed and trimmed[-1] is None:
+        trimmed.pop()
+    if len(trimmed) <= len(letters) and (len(trimmed) == len(letters) or len(trimmed) < len(cells)):
+        # blank cells at the end of the row are the lowest grades that weren't awarded
+        return list(zip(letters, trimmed + [None] * (len(letters) - len(trimmed))))
+    filled = [cell for cell in cells if cell is not None]
+    if len(filled) == len(letters):   # stray double spaces that weren't blank cells
+        return list(zip(letters, filled))
+    return None
 
 
 def component_thresholds(metadata, near=None):
     """
     Return (max_mark, {grade: minimum_mark}) for this exact paper/variant,
     read from Cambridge's grade threshold document.
+
+    The columns come from the PDF's own header, so IGCSE 9-1 isn't forced into
+    A-G and old tables with only A C E F columns map correctly. A dash or blank
+    cell means that grade isn't available on this component (core papers have
+    no A/B). If the columns can't be lined up for certain the grades are left
+    empty: no grade is better than a wrong one.
     """
     from pypdf import PdfReader  # imported here so the module stays light
 
     path = get(metadata, "gt", near)
     text = "\n".join(page.extract_text() or "" for page in PdfReader(path).pages)
     component = f"{metadata['paper']}{metadata['variant']}"
-    match = re.search(rf"Component\s+{component}\s+((?:\d+\s+){{2,8}}\d+)", text)
-    if not match:
+    match = re.search(rf"Component\s+{re.escape(component)}(?!\d)[ \t]([^\n]+)", text)
+    values = _component_values(match.group(1)) if match else []
+    if len(values) < 2 or not isinstance(values[0], int):
         raise NotAvailableError("This paper isn't listed in Cambridge's grade thresholds.")
-    numbers = [int(n) for n in match.group(1).split()]
-    max_mark, boundaries = numbers[0], numbers[1:]
-    letters = GRADE_LETTERS.get(metadata.get("qualification"), ["A", "B", "C", "D", "E", "F", "G"])
-    # IGCSE (9-1) and some syllabuses have different columns; zip only what lines up
-    return max_mark, dict(zip(letters, boundaries))
+    max_mark, cells = values[0], values[1:]
+    letters = _grade_header(text, match.start()) or _infer_grades(len(cells), metadata)
+    pairs = _match_columns(letters, cells) if letters else None
+    thresholds = {letter: minimum for letter, minimum in pairs or [] if minimum is not None}
+    minimums = list(thresholds.values())
+    if minimums != sorted(minimums, reverse=True) or any(m > max_mark for m in minimums):
+        thresholds = {}
+    return max_mark, thresholds
 
 
 def grade_for(score, max_score, thresholds_max, thresholds):
