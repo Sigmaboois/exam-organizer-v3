@@ -114,6 +114,9 @@ def _cover_pages(width, height, info, marking, grade):
         canvas.text(margin, y, "Please double-check: " + ", ".join(marking["needs_review"]), size=10,
                     bold=True, colour=AMBER)
         y -= 14
+    if marking.get("teacher_adjusted"):
+        canvas.text(margin, y, "Marks adjusted by the teacher.", size=10, bold=True)
+        y -= 14
     y -= 12
 
     def table_header():

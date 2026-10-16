@@ -13,9 +13,6 @@ import uuid
 
 from src.gui_common import MARKED_DIR, STAGING_DIR_NAME, safe_name
 
-# Required by renamer to build the folder path and file name
-REQUIRED_FIELDS = ("qualification", "subject_code", "year", "session", "paper", "variant", "paper_type")
-
 reader = parser = renamer = scraper = None
 cambridge_files = solve_detect = marker = scorebook = reports = None
 
@@ -49,24 +46,23 @@ def refresh_subject_list():
 def analyse(pdf_path):
     """Read one PDF and return (metadata, problem). problem is None if it can be sorted."""
     text = reader.read_file(pdf_path)
-    if not text.strip():
-        return None, "I couldn't find any text in this PDF. It might be a scanned image."
+    metadata = parser.identify(text, pdf_path)
+    if not text.strip() and not metadata.get("subject_code"):
+        return metadata, "I couldn't find any text in this PDF. It might be a scanned image."
 
-    metadata = parser.meta_extract(text)
-
-    if metadata["subject_code"] is None:
-        return metadata, "This doesn't look like a Cambridge question paper or mark scheme."
-    if metadata["year"] is None or metadata["session"] is None:
+    if metadata.get("subject_code") is None:
+        return metadata, "This doesn't look like a Cambridge paper."
+    if metadata.get("year") is None or metadata.get("session") is None:
         return metadata, ("I couldn't tell which exam series this is from. If it was re-saved "
-                          "by a note-taking app, try the original PDF.")
-    if metadata["qualification"] is None:
+                          "by a note-taking app, try the original PDF, or press Fix details.")
+    if metadata.get("qualification") is None:
         return metadata, "I couldn't tell whether this is IGCSE, O Level or AS & A Level."
-    missing = [field for field in REQUIRED_FIELDS if metadata[field] is None]
+    missing = parser.missing_fields(metadata)
     if missing:
-        return metadata, "Some details are missing: " + ", ".join(missing).replace("_", " ") + "."
+        return metadata, "Some details are missing: " + ", ".join(missing).replace("_", " ") + ". Press Fix details."
 
     # Subjects Cambridge no longer offers aren't on their website, so give them a fallback name
-    if metadata["subject_name"] is None:
+    if metadata.get("subject_name") is None:
         metadata["subject_name"] = f"Subject {metadata['subject_code']}"
     return metadata, None
 
@@ -129,6 +125,12 @@ def detect_answers(pdf_path, metadata):
 # Checking
 # --------------------------------------------------------------------------
 
+def paper_heading(metadata):
+    return (f"{metadata.get('qualification')} {metadata.get('subject_name')} ({metadata.get('subject_code')}) "
+            f"Paper {metadata.get('paper')} v{metadata.get('variant')}, "
+            f"{(metadata.get('session') or '').replace('-', '/')} {metadata.get('year')}")
+
+
 def check_paper(pdf_path, metadata, student=None, class_name=None, key_override=None, progress=None):
     """
     Mark a solved paper against its mark scheme and make a marked PDF copy.
@@ -158,9 +160,7 @@ def check_paper(pdf_path, metadata, student=None, class_name=None, key_override=
         pass  # grade thresholds aren't published for every paper; the score is still useful
 
     say("Making the marked copy…")
-    title = (f"{metadata.get('qualification')} {metadata.get('subject_name')} ({metadata.get('subject_code')}) "
-             f"Paper {metadata.get('paper')} v{metadata.get('variant')}, "
-             f"{(metadata.get('session') or '').replace('-', '/')} {metadata.get('year')}")
+    title = paper_heading(metadata)
     folder = os.path.join(MARKED_DIR, safe_name(class_name or "Not in a class"), safe_name(student or "Unnamed"))
     file_name = safe_name(f"{metadata.get('subject_name')} P{metadata.get('paper')}{metadata.get('variant')} "
                           f"{metadata.get('session')} {metadata.get('year')} - marked") + ".pdf"
@@ -168,6 +168,39 @@ def check_paper(pdf_path, metadata, student=None, class_name=None, key_override=
     reports.marked_pdf(pdf_path, marking, marked_path, title=title, student=student, grade=grade)
 
     return {"marking": marking, "grade": grade, "marked_pdf": marked_path, "mark_scheme": mark_scheme}
+
+
+def revise_marks(pdf_path, metadata, marking, awards, marked_path, student=None, grade=None):
+    """
+    Apply a teacher's mark edits, work out the grade again and rewrite the marked PDF.
+    awards is one integer per question, in order. Returns (marking, grade, marked_path).
+    """
+    questions = marking.get("questions") or []
+    if len(awards) != len(questions):
+        raise ValueError("The mark list doesn't match the questions.")
+    updated = json.loads(json.dumps(marking))
+    for question, awarded in zip(updated["questions"], awards):
+        max_marks = int(question.get("max_marks") or 0)
+        if awarded < 0 or awarded > max_marks:
+            raise ValueError(f"{question.get('question')} is out of {max_marks}.")
+        question["marks_awarded"] = awarded
+    updated["total"] = sum(q["marks_awarded"] for q in updated["questions"])
+    updated["max_total"] = sum(q["max_marks"] for q in updated["questions"])
+    updated["teacher_adjusted"] = True
+    try:
+        thresholds_max, thresholds = cambridge_files.component_thresholds(metadata, near=pdf_path)
+        grade = cambridge_files.grade_for(updated["total"], updated["max_total"], thresholds_max, thresholds)
+        updated["paper_total_marks"] = thresholds_max
+        updated["complete"] = updated["max_total"] == thresholds_max
+    except Exception:
+        pass
+    title = paper_heading(metadata)
+    try:
+        reports.marked_pdf(pdf_path, updated, marked_path, title=title, student=student, grade=grade)
+    except PermissionError:
+        marked_path = _unique_path(marked_path)
+        reports.marked_pdf(pdf_path, updated, marked_path, title=title, student=student, grade=grade)
+    return updated, grade, marked_path
 
 
 def _unique_path(path):
