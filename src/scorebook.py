@@ -62,8 +62,14 @@ def add_class(name, qualification=None):
 
 
 def rename_class(class_id, name):
+    name = name.strip()
+    if not name:
+        raise ValueError("Please give the class a name.")
     with connect() as db:
-        db.execute("UPDATE classes SET name = ? WHERE id = ?", (name.strip(), class_id))
+        try:
+            db.execute("UPDATE classes SET name = ? WHERE id = ?", (name, class_id))
+        except sqlite3.IntegrityError as error:
+            raise ValueError(f'There is already a class called "{name}".') from error
 
 
 def delete_class(class_id):
@@ -106,6 +112,17 @@ def add_student(class_id, name):
         return cursor.lastrowid
 
 
+def rename_student(student_id, name):
+    name = name.strip()
+    if not name:
+        raise ValueError("Please type the student's name.")
+    with connect() as db:
+        try:
+            db.execute("UPDATE students SET name = ? WHERE id = ?", (name, student_id))
+        except sqlite3.IntegrityError as error:
+            raise ValueError(f'{name} is already in this class.') from error
+
+
 def delete_student(student_id):
     with connect() as db:
         db.execute("DELETE FROM students WHERE id = ?", (student_id,))
@@ -138,6 +155,14 @@ def save_result(student_id, metadata, marking, grade=None, marked_pdf=None, sour
         return cursor.lastrowid
 
 
+def update_result(result_id, marking, grade=None, marked_pdf=None):
+    """Replace the score after a teacher corrects the AI's marks."""
+    with connect() as db:
+        db.execute("""UPDATE results SET score = ?, max_score = ?, grade = ?, details = ?, marked_pdf = ?
+                      WHERE id = ?""",
+                   (marking["total"], marking["max_total"], grade, json.dumps(marking), marked_pdf, result_id))
+
+
 def delete_result(result_id):
     with connect() as db:
         db.execute("DELETE FROM results WHERE id = ?", (result_id,))
@@ -158,3 +183,38 @@ def results(student_id=None, class_id=None):
     query += " ORDER BY r.checked_at DESC"
     with connect() as db:
         return [dict(row) for row in db.execute(query, params).fetchall()]
+
+
+def topics_recorded(rows):
+    """True once a checked paper includes a topic on any question."""
+    for row in rows:
+        try:
+            marking = json.loads(row.get("details") or "{}")
+        except (ValueError, AttributeError):
+            continue
+        if any((question.get("topic") or "").strip() for question in marking.get("questions") or []):
+            return True
+    return False
+
+
+def topic_losses(rows):
+    """Topics where marks were lost, worst first. Questions checked before topics existed are skipped."""
+    buckets = {}
+    for row in rows:
+        try:
+            marking = json.loads(row.get("details") or "{}")
+        except ValueError:
+            continue
+        for question in marking.get("questions") or []:
+            topic = (question.get("topic") or "").strip()
+            if not topic:
+                continue
+            max_marks = int(question.get("max_marks") or 0)
+            awarded = int(question.get("marks_awarded") or 0)
+            bucket = buckets.setdefault(topic, {"lost": 0, "max": 0, "questions": 0})
+            bucket["lost"] += max(0, max_marks - awarded)
+            bucket["max"] += max_marks
+            bucket["questions"] += 1
+    ranked = [{"topic": topic, **bucket} for topic, bucket in buckets.items() if bucket["lost"] > 0]
+    ranked.sort(key=lambda item: (-item["lost"], item["topic"].lower()))
+    return ranked
