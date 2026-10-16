@@ -41,6 +41,8 @@ Mark the student's work exactly as a Cambridge examiner would:
 Before deciding each mark, transcribe the student's key working and final answer for that part.
 Include EVERY question part from the mark scheme, in order, including parts the student left blank.
 marks_awarded must never exceed max_marks. Use the question labels as printed, e.g. "3(b)(ii)".
+Set topic to the syllabus topic this part belongs to, in a few words (for example "Kinematics" or
+"Organic chemistry"). Use the same topic name for every part of that topic.
 Keep feedback short, kind and specific, written to the student."""
 
 RESULT_SCHEMA = {
@@ -59,9 +61,10 @@ RESULT_SCHEMA = {
                     "marking": {"type": "STRING"},
                     "feedback": {"type": "STRING"},
                     "confidence": {"type": "STRING", "enum": ["high", "medium", "low"]},
+                    "topic": {"type": "STRING"},
                 },
                 "required": ["question", "page", "max_marks", "marks_awarded", "student_answer",
-                             "marking", "feedback", "confidence"],
+                             "marking", "feedback", "confidence", "topic"],
             },
         },
         "paper_total_marks": {"type": "INTEGER"},
@@ -179,7 +182,8 @@ def mark(student_pdf, mark_scheme_pdf, metadata, key_override=None):
     for q in result.get("questions", []):
         max_marks = max(0, int(q.get("max_marks") or 0))
         awarded = min(max(0, int(q.get("marks_awarded") or 0)), max_marks)
-        questions.append({**q, "max_marks": max_marks, "marks_awarded": awarded})
+        questions.append({**q, "max_marks": max_marks, "marks_awarded": awarded,
+                          "topic": (q.get("topic") or "").strip()})
 
     total = sum(q["marks_awarded"] for q in questions)
     max_total = sum(q["max_marks"] for q in questions)
