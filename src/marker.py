@@ -11,12 +11,17 @@ import base64
 import io
 import json
 import os
+import time
 
 import requests
 
 from src import solve_detect
 
-MODELS = ["gemini-3.8-flash", "gemini-2.5-flash"]  # tried in order, all on the free tier
+# Tried in order, all on the free tier. Each model has its own free daily limit, so when one is
+# overloaded, retired or out of quota the next one is used.
+MODELS = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash"]
+TRY_NEXT_MODEL = {404, 429, 500, 502, 503, 504}
+OVERLOADED = {500, 502, 503, 504}
 ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 PAGE_SCALE = 2.0     # 144 dpi: small handwriting stays readable
 JPEG_QUALITY = 82
@@ -147,6 +152,9 @@ def _friendly_http_error(response):
                 "(if it keeps happening, the daily free limit is used up; it resets tomorrow).")
     if response.status_code in (401, 403) or "API key" in detail:
         return "The AI checker's key isn't working. Add your own free key in Settings."
+    if response.status_code == 503:
+        return ("Google's free AI checker is very busy right now (it happens at busy times of day). "
+                "Press Check again in a few minutes.")
     if response.status_code >= 500:
         return "Google's AI service is having trouble right now. Please try again in a few minutes."
     return f"The AI checker couldn't mark this paper ({response.status_code}): {detail}"
@@ -160,9 +168,21 @@ def mark(student_pdf, mark_scheme_pdf, metadata, key_override=None):
 
     body = _build_request(student_pdf, mark_scheme_pdf, metadata)
     response = None
-    for model in MODELS:
-        response = _call(model, body, key)
-        if response.status_code != 404:  # 404 = this model isn't available, try the next one
+    # Busy hours on the free tier can turn every model away for a short while: after a full round
+    # of "busy" answers, wait 45 seconds and go round once more before giving up
+    for attempt_round in range(2):
+        if attempt_round == 1:
+            if response.status_code not in OVERLOADED | {429}:
+                break
+            time.sleep(45)
+        for model in MODELS:
+            response = _call(model, body, key)
+            if response.status_code in OVERLOADED:  # briefly overloaded: wait and try once more
+                time.sleep(8)
+                response = _call(model, body, key)
+            if response.status_code not in TRY_NEXT_MODEL:
+                break
+        if response.status_code == 200:
             break
     if response.status_code != 200:
         raise MarkingError(_friendly_http_error(response))
