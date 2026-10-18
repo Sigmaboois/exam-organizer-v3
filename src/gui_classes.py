@@ -9,6 +9,9 @@ import flet as ft
 from src import app_tasks as tasks
 from src.gui_common import card, empty_state, open_in_explorer, pill, section_title
 
+GRADE_ORDER = ["9", "8", "7", "6", "5", "4", "3", "2", "1", "A*", "A", "B", "C", "D", "E", "F", "G",
+                "a", "b", "c", "d", "e", "U"]
+
 # Which school years usually sit each qualification, shown on the dividers
 DIVIDER_HINTS = {
     "IGCSE": "Usually Grades 9–10",
@@ -43,6 +46,8 @@ class ClassesScreen:
 
         self.class_title = ft.Text("", size=20, weight=ft.FontWeight.BOLD)
         self.class_pill = ft.Container()
+        # A fresh Column is built on every refresh: re-filling the same one left duplicated rows on screen
+        self.overview = ft.Container()
         self.new_student_field = ft.TextField(label="Add a student", hint_text="Full name", dense=True, expand=True,
                                               on_submit=self._add_student)
         self.student_list = ft.ListView(spacing=6, expand=True)
@@ -50,8 +55,11 @@ class ClassesScreen:
             ft.Row([self.class_title, self.class_pill, ft.Container(expand=True),
                     ft.OutlinedButton("Export class", icon=ft.Icons.TABLE_VIEW, on_click=self._export_class)],
                    vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=12),
+            self.overview,
             ft.Row([self.new_student_field,
-                    ft.IconButton(icon=ft.Icons.PERSON_ADD, tooltip="Add student", on_click=self._add_student)]),
+                    ft.IconButton(icon=ft.Icons.PERSON_ADD, tooltip="Add student", on_click=self._add_student),
+                    ft.IconButton(icon=ft.Icons.PLAYLIST_ADD, tooltip="Paste a list of names",
+                                  on_click=self._paste_students)]),
             self.student_list,
         ], spacing=12, expand=True)
         self.no_class = empty_state(ft.Icons.GROUPS_OUTLINED, "Choose or create a class",
@@ -109,6 +117,9 @@ class ClassesScreen:
                           "Marked PDF copies stay on your computer.",
                           lambda: self._delete_class(school_class))
 
+        def rename(e):
+            self._rename_dialog("Rename class", school_class["name"], lambda name: self._rename_class(school_class, name))
+
         return ft.Container(
             content=ft.Row([
                 ft.Icon(ft.Icons.CLASS_, color=ft.Colors.PRIMARY if selected else ft.Colors.ON_SURFACE_VARIANT),
@@ -117,6 +128,7 @@ class ClassesScreen:
                     ft.Text(f"{count} student{'s' if count != 1 else ''}", size=12,
                             color=ft.Colors.ON_SURFACE_VARIANT),
                 ], spacing=0, expand=True),
+                ft.IconButton(icon=ft.Icons.EDIT_OUTLINED, icon_size=18, tooltip="Rename class", on_click=rename),
                 ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, icon_size=18, tooltip="Delete class", on_click=delete),
             ]),
             padding=ft.Padding.symmetric(horizontal=10, vertical=6),
@@ -133,6 +145,7 @@ class ClassesScreen:
                                        ft.Colors.PRIMARY if school_class["qualification"] else ft.Colors.OUTLINE)
         students = await asyncio.to_thread(tasks.scorebook.students, school_class["id"])
         results = await asyncio.to_thread(tasks.scorebook.results, None, school_class["id"])
+        self.overview.content = ft.Column(self._overview(results), spacing=8)
         by_student = {}
         for result in results:
             by_student.setdefault(result["student_id"], []).append(result)
@@ -144,15 +157,49 @@ class ClassesScreen:
         self.student_list.controls = controls
         self.detail_holder.content = self.class_detail
 
+    def _overview(self, results):
+        if not results:
+            return [ft.Text("No papers checked yet.", size=12, color=ft.Colors.ON_SURFACE_VARIANT)]
+        percents = [100 * row["score"] / row["max_score"] for row in results if row["max_score"]]
+        average = round(sum(percents) / len(percents)) if percents else 0
+        counts = {}
+        for row in results:
+            counts[row["grade"] or "Ungraded"] = counts.get(row["grade"] or "Ungraded", 0) + 1
+        ordered = [grade for grade in GRADE_ORDER if grade in counts]
+        ordered += [grade for grade in counts if grade not in ordered]
+        grade_pills = ft.Row([pill(f"{grade} {counts[grade]}", ft.Colors.PRIMARY) for grade in ordered],
+                             spacing=6, wrap=True)
+        topics = tasks.scorebook.topic_losses(results)
+        topic_lines = [ft.Text("Topics to revise", size=13, weight=ft.FontWeight.W_600)]
+        if topics:
+            topic_lines.append(ft.Column([
+                ft.Text(f"{item['topic']}  ·  {item['lost']} mark{'s' if item['lost'] != 1 else ''} lost "
+                        f"across {item['questions']} part{'s' if item['questions'] != 1 else ''}", size=12)
+                for item in topics[:6]
+            ], spacing=2))
+        elif tasks.scorebook.topics_recorded(results):
+            topic_lines.append(ft.Text("No marks lost on a topic so far.", size=12,
+                                       color=ft.Colors.ON_SURFACE_VARIANT))
+        else:
+            topic_lines.append(ft.Text("Topic insights show up after the next paper you check.", size=12,
+                                       color=ft.Colors.ON_SURFACE_VARIANT))
+        return [
+            ft.Text(f"Average {average}% across {len(results)} paper{'s' if len(results) != 1 else ''}",
+                    size=13, weight=ft.FontWeight.W_600),
+            grade_pills,
+            *topic_lines,
+        ]
+
     def _student_tile(self, student, results):
         if results:
-            subtitle = (f"{len(results)} paper{'s' if len(results) != 1 else ''} checked · "
-                        f"average {student['average']:.0f}%")
             latest = results[0]
-            trailing = pill(f"Latest: {latest['score']}/{latest['max_score']}"
-                            + (f" · {latest['grade']}" if latest["grade"] else ""), ft.Colors.GREEN_700)
+            subtitle = (f"{len(results)} paper{'s' if len(results) != 1 else ''} checked · "
+                        f"average {student['average']:.0f}% · latest {latest['score']}/{latest['max_score']}"
+                        + (f" ({latest['grade']})" if latest["grade"] else ""))
         else:
-            subtitle, trailing = "No papers checked yet", None
+            subtitle = "No papers checked yet"
+        # No trailing widget: it would replace the arrow that shows the row can be opened
+        trailing = None
 
         async def delete_student(e):
             self._confirm(f"Remove {student['name']}?", "Their saved scores will be deleted too.",
@@ -161,8 +208,16 @@ class ClassesScreen:
         rows = [self._result_row(result) for result in results] or [
             ft.Text("Check a paper and choose this student to save it here.", size=12,
                     color=ft.Colors.ON_SURFACE_VARIANT)]
-        rows.append(ft.Row([ft.TextButton("Remove student", icon=ft.Icons.PERSON_REMOVE_OUTLINED,
-                                          on_click=delete_student)], alignment=ft.MainAxisAlignment.END))
+        weak = tasks.scorebook.topic_losses(results)[:3]
+        if weak:
+            rows.append(ft.Text("Revise: " + ", ".join(f"{item['topic']} ({item['lost']} lost)" for item in weak),
+                                size=12, color=ft.Colors.PRIMARY))
+        rows.append(ft.Row([
+            ft.TextButton("Rename", icon=ft.Icons.EDIT_OUTLINED,
+                          on_click=lambda e: self._rename_dialog(
+                              "Rename student", student["name"], lambda name: self._rename_student(student, name))),
+            ft.TextButton("Remove student", icon=ft.Icons.PERSON_REMOVE_OUTLINED, on_click=delete_student),
+        ], alignment=ft.MainAxisAlignment.END))
         return ft.ExpansionTile(
             title=ft.Text(student["name"], weight=ft.FontWeight.W_600),
             subtitle=ft.Text(subtitle, size=12, color=ft.Colors.ON_SURFACE_VARIANT),
@@ -202,6 +257,66 @@ class ClassesScreen:
         )
 
     # ---------- actions ----------
+
+    def _rename_dialog(self, title, current, on_save):
+        field = ft.TextField(label="Name", value=current, dense=True, autofocus=True)
+
+        async def save(e):
+            self.app.page.pop_dialog()
+            await on_save(field.value or "")
+
+        field.on_submit = save
+        self.app.page.show_dialog(ft.AlertDialog(
+            title=ft.Text(title),
+            content=ft.Container(width=360, content=field),
+            actions=[ft.TextButton("Cancel", on_click=lambda e: self.app.page.pop_dialog()),
+                     ft.FilledButton("Save", on_click=save)],
+        ))
+
+    async def _rename_class(self, school_class, name):
+        try:
+            await asyncio.to_thread(tasks.scorebook.rename_class, school_class["id"], name)
+        except ValueError as error:
+            self.app.toast(str(error), error=True)
+            return
+        await self.refresh()
+
+    async def _rename_student(self, student, name):
+        try:
+            await asyncio.to_thread(tasks.scorebook.rename_student, student["id"], name)
+        except ValueError as error:
+            self.app.toast(str(error), error=True)
+            return
+        await self.refresh()
+
+    async def _paste_students(self, e):
+        if not self.selected_class:
+            return
+        box = ft.TextField(label="Student names", multiline=True, min_lines=6, max_lines=12,
+                           hint_text="One name per line")
+
+        async def save(e):
+            names = [line.strip() for line in (box.value or "").splitlines() if line.strip()]
+            self.app.page.pop_dialog()
+            if not names:
+                return
+            added = skipped = 0
+            for name in names:
+                try:
+                    await asyncio.to_thread(tasks.scorebook.add_student, self.selected_class["id"], name)
+                    added += 1
+                except ValueError:
+                    skipped += 1
+            await self.refresh()
+            note = f" {skipped} already in the class." if skipped else ""
+            self.app.toast(f"Added {added} student{'s' if added != 1 else ''}.{note}")
+
+        self.app.page.show_dialog(ft.AlertDialog(
+            title=ft.Text("Paste a class list"),
+            content=ft.Container(width=420, content=box),
+            actions=[ft.TextButton("Cancel", on_click=lambda e: self.app.page.pop_dialog()),
+                     ft.FilledButton("Add students", on_click=save)],
+        ))
 
     async def _add_class(self, e):
         try:
