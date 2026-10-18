@@ -128,7 +128,8 @@ async def main(page: ft.Page):
                 ft.Text("Create classes and add students. Checked papers are saved to each student's scores, "
                         "and you can export everything to a spreadsheet."),
                 ft.Divider(),
-                note("Works with Cambridge (CAIE) IGCSE, O Level and AS & A Level question papers and mark schemes."),
+                note("Works with Cambridge (CAIE) IGCSE, O Level and AS & A Level. Inserts, examiner reports "
+                     "and grade threshold files are sorted too. Only question papers can be checked."),
                 note("With \"Keep the originals\" on, your files stay where they are and copies are sorted. "
                      "Nothing is ever overwritten."),
                 note("Checking uses Google's free Gemini AI. On the free tier Google may use what is sent "
