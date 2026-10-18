@@ -6,8 +6,9 @@ import os
 import flet as ft
 
 from src import app_tasks as tasks
-from src.gui_common import (card, describe_paper, drop_area, empty_state, find_pdfs, friendly_error,
-                            open_in_explorer, paper_title, pill, same_file_key, section_title)
+from src.gui_common import (PAPER_TYPES, card, describe_paper, drop_area, empty_state, find_pdfs,
+                            friendly_error, open_in_explorer, paper_title, pill, same_file_key,
+                            section_title, show_details_dialog)
 
 NO_STUDENT = "none"
 
@@ -40,6 +41,8 @@ class CheckPaper:
                                                  on_click=lambda e: screen.queue_check(self))
         self.view_button = ft.FilledButton("Results", icon=ft.Icons.GRADING, visible=False,
                                            on_click=lambda e: screen.show_results(self))
+        self.fix_button = ft.IconButton(icon=ft.Icons.EDIT_OUTLINED, icon_size=18, tooltip="Fix the detected details",
+                                        visible=False, on_click=lambda e: screen.fix_details(self))
         self.remove_button = ft.IconButton(icon=ft.Icons.CLOSE, icon_size=18, tooltip="Remove from the list",
                                            on_click=lambda e: screen.remove(self))
         self.row = ft.Container(
@@ -49,6 +52,7 @@ class CheckPaper:
                 self.student,
                 ft.Column([self.check_button, self.view_button], spacing=4,
                           horizontal_alignment=ft.CrossAxisAlignment.END),
+                self.fix_button,
                 self.remove_button,
             ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=10),
             padding=ft.Padding.symmetric(horizontal=12, vertical=10),
@@ -94,6 +98,7 @@ class CheckPaper:
         self.check_button.content = "Check again" if self.status == "done" else "Check"
         self.check_button.disabled = self.screen.busy_with is not None and self.status != "done"
         self.view_button.visible = self.status == "done"
+        self.fix_button.visible = self.status in ("ready", "problem")
         self.remove_button.visible = self.status not in ("checking",)
         self.student.disabled = self.status == "checking"
 
@@ -182,6 +187,8 @@ class CheckScreen:
         ], spacing=8))
 
         self.summary_text = ft.Text("", size=13, color=ft.Colors.ON_SURFACE_VARIANT)
+        self.assign_student = ft.Dropdown(label="Assign every paper to", dense=True, width=250, text_size=13)
+        self.assign_button = ft.OutlinedButton("Assign all", icon=ft.Icons.PERSON_ADD, on_click=self._assign_all)
         self.clear_button = ft.TextButton("Clear list", icon=ft.Icons.CLEAR_ALL, on_click=self._clear)
         self.paper_list = ft.ListView(spacing=8, expand=True, padding=ft.Padding.only(right=8))
         self.empty = empty_state(ft.Icons.FACT_CHECK_OUTLINED, "No papers to check yet",
@@ -196,6 +203,8 @@ class CheckScreen:
         list_card = card(ft.Column([
             ft.Row([section_title(2, "Choose the student and check"), ft.Container(expand=True), self.clear_button]),
             self.summary_text,
+            ft.Row([self.assign_student, self.assign_button], spacing=8,
+                   vertical_alignment=ft.CrossAxisAlignment.CENTER),
             self.list_holder,
             ft.Row([self.result_text, self.check_all_button], spacing=12,
                    vertical_alignment=ft.CrossAxisAlignment.CENTER),
@@ -221,6 +230,11 @@ class CheckScreen:
                     options.append((student["id"], f"{school_class['name']} · {student['name']}"))
                     names[student["id"]] = (student["name"], school_class["name"])
         self.student_options, self.student_names = options, names
+        current = self.assign_student.value
+        self.assign_student.options = [ft.DropdownOption(key=str(student_id), text=label)
+                                       for student_id, label in options]
+        keys = {option.key for option in self.assign_student.options}
+        self.assign_student.value = current if current in keys else None
         for paper in self.papers:
             paper.set_student_options(options)
             paper.render()
@@ -316,8 +330,9 @@ class CheckScreen:
                     paper.metadata, problem = await asyncio.to_thread(tasks.analyse, paper.path)
                 else:
                     problem = None
-                if not problem and paper.metadata.get("paper_type") == "MS":
-                    problem = "This is a mark scheme. Add the student's question paper instead."
+                if not problem and paper.metadata.get("paper_type") not in (None, "QP"):
+                    label = PAPER_TYPES.get(paper.metadata.get("paper_type"), "different file")
+                    problem = f"This is a {label.lower()}. Add the student's question paper instead."
                 if not problem and paper.answers is None:
                     paper.answers = await asyncio.to_thread(tasks.detect_answers, paper.path, paper.metadata)
             except Exception as error:
@@ -329,6 +344,45 @@ class CheckScreen:
             self.app.page.update()
 
     # ---------- checking ----------
+
+    def fix_details(self, paper):
+        if paper.status == "checking" or not self.app.backend_ready.is_set():
+            return
+
+        async def apply(metadata):
+            paper.metadata = metadata
+            paper.answers = None
+            paper.message = ""
+            paper.status = "waiting"
+            paper.render()
+            self.read_queue.put_nowait(paper)
+            self.refresh_summary()
+            self.app.page.update()
+
+        show_details_dialog(self.app.page, paper.metadata, tasks.parser.complete_manual, apply)
+
+    async def _assign_all(self, e):
+        value = self.assign_student.value
+        if not value:
+            self.app.toast("Choose a student first.", error=True)
+            return
+        assigned = skipped = 0
+        for paper in self.papers:
+            if paper.status == "checking":
+                skipped += 1
+                continue
+            paper.student.value = value
+            assigned += 1
+            if paper.status == "done" and not paper.saved and paper.student_id:
+                await self.save(paper, quiet=True)
+            paper.render()
+        self.refresh_summary()
+        if assigned:
+            await self.app.classes.refresh()
+        self.app.page.update()
+        name, _ = self.student_names.get(int(value), ("that student", None))
+        note = f" Left {skipped} that's still being checked." if skipped else ""
+        self.app.toast(f"Assigned {assigned} paper{'s' if assigned != 1 else ''} to {name}.{note}")
 
     def queue_check(self, paper):
         if paper.status in ("queued", "checking") or not paper._checkable():
@@ -398,7 +452,7 @@ class CheckScreen:
             self.result_text.color = ft.Colors.GREEN_700
         self.app.page.update()
 
-    async def save(self, paper):
+    async def save(self, paper, quiet=False):
         result = paper.result
         if paper.result_id:  # checked again: replace the old score instead of adding a second one
             await asyncio.to_thread(tasks.scorebook.delete_result, paper.result_id)
@@ -406,9 +460,10 @@ class CheckScreen:
             tasks.scorebook.save_result, paper.student_id, paper.metadata, result["marking"],
             result.get("grade"), result.get("marked_pdf"), paper.path)
         paper.saved = True
-        name, _ = self.student_names.get(paper.student_id, ("the student", None))
-        self.app.toast(f"Saved to {name}'s scores.")
-        await self.app.classes.refresh()
+        if not quiet:
+            name, _ = self.student_names.get(paper.student_id, ("the student", None))
+            self.app.toast(f"Saved to {name}'s scores.")
+            await self.app.classes.refresh()
 
     # ---------- results ----------
 
@@ -417,17 +472,25 @@ class CheckScreen:
         marking = result["marking"]
         percent = round(100 * marking["total"] / marking["max_total"]) if marking["max_total"] else 0
 
+        editors = []
         rows = []
         for q in marking["questions"]:
             full, zero = q["marks_awarded"] == q["max_marks"], q["marks_awarded"] == 0
             colour = ft.Colors.GREEN_700 if full else ft.Colors.RED_700 if zero else ft.Colors.AMBER_800
             flag = [pill("Double-check", ft.Colors.AMBER_800, ft.Icons.RATE_REVIEW)] if q.get("confidence") == "low" else []
+            topic = (q.get("topic") or "").strip()
+            mark_field = ft.TextField(value=str(q["marks_awarded"]), width=56, dense=True, text_size=13,
+                                      text_align=ft.TextAlign.CENTER)
+            editors.append(mark_field)
             rows.append(ft.Container(
                 content=ft.Row([
                     ft.Text(q["question"], weight=ft.FontWeight.BOLD, width=70),
-                    ft.Text(f"{q['marks_awarded']} / {q['max_marks']}", weight=ft.FontWeight.BOLD, color=colour,
-                            width=60),
                     ft.Column([
+                        mark_field,
+                        ft.Text(f"/ {q['max_marks']}", size=11, color=colour),
+                    ], spacing=0, width=56),
+                    ft.Column([
+                        ft.Text(topic, size=11, color=ft.Colors.PRIMARY) if topic else ft.Container(),
                         ft.Text(q.get("marking", ""), size=13),
                         ft.Text(q.get("feedback", ""), size=12, color=ft.Colors.ON_SURFACE_VARIANT, italic=True),
                         ft.Text(f"Student wrote: {q.get('student_answer', '')}", size=11,
@@ -461,11 +524,52 @@ class CheckScreen:
         def open_marked(e):
             open_in_explorer(result["marked_pdf"])
 
+        save_button = ft.FilledButton("Save corrections", icon=ft.Icons.SAVE_OUTLINED)
+
+        async def save_corrections(e):
+            awards = []
+            for question, field in zip(marking["questions"], editors):
+                raw = (field.value or "").strip()
+                if not raw.isdigit():
+                    self.app.toast(f"{question['question']}: enter a whole number of marks.", error=True)
+                    return
+                awarded = int(raw)
+                if awarded > question["max_marks"]:
+                    self.app.toast(f"{question['question']} is out of {question['max_marks']}.", error=True)
+                    return
+                awards.append(awarded)
+            save_button.disabled = True
+            self.app.page.update()
+            student_name, _ = self.student_names.get(paper.student_id, (None, None))
+            try:
+                updated, grade, marked_path = await asyncio.to_thread(
+                    tasks.revise_marks, paper.path, paper.metadata, marking, awards, result["marked_pdf"],
+                    student_name, result.get("grade"))
+            except Exception as error:
+                save_button.disabled = False
+                self.app.toast(str(error), error=True)
+                self.app.page.update()
+                return
+            paper.result = {**result, "marking": updated, "grade": grade, "marked_pdf": marked_path}
+            if paper.result_id:
+                await asyncio.to_thread(tasks.scorebook.update_result, paper.result_id, updated, grade, marked_path)
+            paper.render()
+            self.app.page.pop_dialog()
+            if paper.result_id:
+                await self.app.classes.refresh()
+            self.app.toast("Corrections saved.")
+            self.show_results(paper)
+
+        save_button.on_click = save_corrections
         self.app.page.show_dialog(ft.AlertDialog(
             title=ft.Text(f"{paper_title(paper.metadata)}  ·  {describe_paper(paper.metadata)}", size=18),
             content=ft.Container(width=720, height=520, content=ft.Column(
-                [header, ft.Text(marking.get("summary", ""), size=13), *extra, ft.Divider(), *rows],
+                [header, ft.Text(marking.get("summary", ""), size=13),
+                 ft.Text("Change a mark and press Save corrections. The grade, marked PDF and score book update.",
+                         size=12, color=ft.Colors.ON_SURFACE_VARIANT),
+                 *extra, ft.Divider(), *rows],
                 spacing=8, scroll=ft.ScrollMode.AUTO)),
-            actions=[ft.TextButton("Open marked copy", icon=ft.Icons.PICTURE_AS_PDF, on_click=open_marked),
+            actions=[save_button,
+                     ft.TextButton("Open marked copy", icon=ft.Icons.PICTURE_AS_PDF, on_click=open_marked),
                      ft.TextButton("Close", on_click=lambda e: self.app.page.pop_dialog())],
         ))
