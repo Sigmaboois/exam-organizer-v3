@@ -9,7 +9,20 @@ import flet_dropzone as ftd
 
 BRAND_COLOR = "#2575FC"
 STAGING_DIR_NAME = ".exam-organizer-staging"
-PAPER_TYPES = {"QP": "Question paper", "MS": "Mark scheme"}
+PAPER_TYPES = {
+    "QP": "Question paper",
+    "MS": "Mark scheme",
+    "IN": "Insert",
+    "ER": "Examiner report",
+    "GT": "Grade thresholds",
+    "CI": "Confidential instructions",
+}
+QUALIFICATIONS = ["IGCSE", "O Level", "AS", "AS & A Level"]
+SESSIONS = [
+    ("February-March", "February–March"),
+    ("May-June", "May–June"),
+    ("October-November", "October–November"),
+]
 
 # Flet only sets FLET_PLATFORM inside apps made with `flet build`, which is also
 # the only place the Dropzone extension exists
@@ -197,3 +210,65 @@ def paper_title(meta, fallback=""):
     if not meta or meta.get("subject_code") is None:
         return fallback
     return f"{meta.get('subject_name') or 'Unknown subject'} ({meta['subject_code']})"
+
+
+def show_details_dialog(page, metadata, resolve, on_apply):
+    """Let the teacher fill in a paper the parser couldn't finish. on_apply(metadata) is awaited."""
+    meta = metadata or {}
+    code = ft.TextField(label="Subject code", value=meta.get("subject_code") or "", dense=True, hint_text="0625")
+    year = ft.TextField(label="Year", value=meta.get("year") or "", dense=True, hint_text="2024", width=140)
+    paper = ft.TextField(label="Paper", value=meta.get("paper") or "", dense=True, hint_text="4", width=120)
+    variant = ft.TextField(label="Variant", value=meta.get("variant") or "", dense=True, hint_text="2", width=120)
+    qualification = ft.Dropdown(
+        label="Qualification", dense=True,
+        value=meta.get("qualification") if meta.get("qualification") in QUALIFICATIONS else None,
+        options=[ft.DropdownOption(key=item, text=item) for item in QUALIFICATIONS],
+    )
+    session = ft.Dropdown(
+        label="Session", dense=True,
+        value=meta.get("session") if meta.get("session") in {key for key, _ in SESSIONS} else None,
+        options=[ft.DropdownOption(key=key, text=label) for key, label in SESSIONS],
+    )
+    paper_type = ft.Dropdown(
+        label="File type", dense=True,
+        value=meta.get("paper_type") if meta.get("paper_type") in PAPER_TYPES else None,
+        options=[ft.DropdownOption(key=key, text=label) for key, label in PAPER_TYPES.items()],
+    )
+    error_text = ft.Text("", size=12, color=ft.Colors.ERROR, visible=False)
+
+    async def save(e):
+        try:
+            cleaned, error = resolve({
+                "subject_code": code.value, "qualification": qualification.value, "year": year.value,
+                "session": session.value, "paper": paper.value, "variant": variant.value,
+                "paper_type": paper_type.value,
+            })
+        except Exception as error:
+            error_text.value = str(error)
+            error_text.visible = True
+            page.update()
+            return
+        if error:
+            error_text.value = error
+            error_text.visible = True
+            page.update()
+            return
+        page.pop_dialog()
+        await on_apply(cleaned)
+
+    page.show_dialog(ft.AlertDialog(
+        title=ft.Text("Fix details"),
+        content=ft.Container(width=440, content=ft.Column([
+            ft.Text("Use this when the file name or the PDF text wasn't enough. Leave paper and variant "
+                    "blank for a whole-series file, like grade thresholds.", size=13,
+                    color=ft.Colors.ON_SURFACE_VARIANT),
+            code,
+            qualification,
+            ft.Row([year, session], spacing=10),
+            ft.Row([paper, variant], spacing=10),
+            paper_type,
+            error_text,
+        ], tight=True, spacing=10, scroll=ft.ScrollMode.AUTO)),
+        actions=[ft.TextButton("Cancel", on_click=lambda e: page.pop_dialog()),
+                 ft.FilledButton("Use these details", on_click=save)],
+    ))

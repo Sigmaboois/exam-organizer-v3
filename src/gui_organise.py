@@ -7,13 +7,14 @@ import flet as ft
 
 from src import app_tasks as tasks
 from src.gui_common import (PAPER_TYPES, card, describe_paper, drop_area, empty_state, find_pdfs,
-                            friendly_error, open_in_explorer, pill, same_file_key, section_title)
+                            friendly_error, open_in_explorer, pill, same_file_key, section_title,
+                            show_details_dialog)
 
 
 class ExamFile:
     """One row in the Organise list."""
 
-    def __init__(self, path, on_remove, on_check):
+    def __init__(self, path, on_remove, on_check, on_fix):
         self.path = path
         self.name = os.path.basename(path)
         self.status = "waiting"   # waiting, reading, ready, problem, sorting, sorted, skipped
@@ -23,6 +24,7 @@ class ExamFile:
         self.answers = None       # None = not looked at yet, otherwise a SolveResult
         self._on_remove = on_remove
         self._on_check = on_check
+        self._on_fix = on_fix
 
         self.icon_slot = ft.Container(width=28, alignment=ft.Alignment.CENTER)
         self.title = ft.Text(self.name, weight=ft.FontWeight.W_600, max_lines=1,
@@ -33,6 +35,9 @@ class ExamFile:
         self.check_button = ft.TextButton("Check it", icon=ft.Icons.FACT_CHECK_OUTLINED, visible=False,
                                           tooltip="Mark this paper against the mark scheme",
                                           on_click=lambda e: self._on_check(self))
+        self.fix_button = ft.TextButton("Fix details", icon=ft.Icons.EDIT_OUTLINED, visible=False,
+                                        tooltip="Type the code, paper and series yourself",
+                                        on_click=lambda e: self._on_fix(self))
         self.action = ft.IconButton(icon=ft.Icons.CLOSE, icon_size=18, tooltip="Remove from the list",
                                     on_click=self._action_clicked)
         self.row = ft.Container(
@@ -40,6 +45,7 @@ class ExamFile:
                 [self.icon_slot,
                  ft.Column([self.title, self.details, ft.Row([self.answers_pill], spacing=6), self.note],
                            spacing=2, expand=True),
+                 self.fix_button,
                  self.check_button,
                  self.action],
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -110,6 +116,7 @@ class ExamFile:
             self.answers_pill.content = pill(f"Has answers on {pages} page{'s' if pages != 1 else ''}",
                                              ft.Colors.TERTIARY, ft.Icons.DRAW)
         self.check_button.visible = solved and self.status not in ("sorting", "waiting", "reading")
+        self.fix_button.visible = self.status in ("ready", "problem", "skipped")
         self.details.visible = bool(self.details.value)
 
 
@@ -230,7 +237,8 @@ class OrganiseScreen:
                 duplicates += 1
                 continue
             known.add(key)
-            exam = ExamFile(path, on_remove=self._remove_file, on_check=self._send_to_check)
+            exam = ExamFile(path, on_remove=self._remove_file, on_check=self._send_to_check,
+                            on_fix=self._fix_details)
             self.files.append(exam)
             self.file_list.controls.append(exam.row)
             self.analysis_queue.put_nowait(exam)
@@ -335,6 +343,23 @@ class OrganiseScreen:
     def _send_to_check(self, exam):
         self.app.check.add_paper(exam.current_path, exam.metadata, exam.answers)
         self.app.go_to("check")
+
+    def _fix_details(self, exam):
+        if self.sorting or not self.app.backend_ready.is_set():
+            return
+
+        async def apply(metadata):
+            exam.metadata = metadata
+            exam.message = ""
+            exam.answers = None
+            exam.status = "ready"
+            exam.render()
+            if metadata.get("paper_type") == "QP":
+                self.answers_queue.put_nowait(exam)
+            self.refresh_summary()
+            self.app.page.update()
+
+        show_details_dialog(self.app.page, exam.metadata, tasks.parser.complete_manual, apply)
 
     # ---------- background work ----------
 
