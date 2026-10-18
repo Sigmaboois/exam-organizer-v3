@@ -16,7 +16,8 @@ import flet as ft
 from src import app_tasks as tasks
 from src.gui_check import CheckScreen
 from src.gui_classes import ClassesScreen
-from src.gui_common import BRAND_COLOR, MARKED_DIR, open_in_explorer
+from src.folders import CLASSES_DIR
+from src.gui_common import BRAND_COLOR, open_in_explorer
 from src.gui_organise import OrganiseScreen
 
 APP_NAME = "Exam Organizer"
@@ -161,10 +162,12 @@ async def main(page: ft.Page):
                 ft.TextButton("Get a free key", icon=ft.Icons.KEY, on_click=lambda e: webbrowser.open(GET_KEY_URL)),
                 key_field,
                 ft.Divider(),
-                ft.Text("Marked copies", weight=ft.FontWeight.BOLD),
-                ft.Text(f"Saved in {MARKED_DIR}", size=13, selectable=True),
+                ft.Text("Class folders", weight=ft.FontWeight.BOLD),
+                ft.Text("Every class has a folder with one per student, holding each checked paper as a "
+                        "marked PDF and a text file explaining the mistakes.", size=13),
+                ft.Text(f"Saved in {CLASSES_DIR}", size=13, selectable=True),
                 ft.TextButton("Open the folder", icon=ft.Icons.FOLDER_OPEN, on_click=lambda e: (
-                    os.makedirs(MARKED_DIR, exist_ok=True), open_in_explorer(MARKED_DIR))),
+                    os.makedirs(CLASSES_DIR, exist_ok=True), open_in_explorer(CLASSES_DIR))),
             ], tight=True, spacing=10)),
             actions=[ft.TextButton("Cancel", on_click=lambda e: page.pop_dialog()),
                      ft.FilledButton("Save", on_click=save)],

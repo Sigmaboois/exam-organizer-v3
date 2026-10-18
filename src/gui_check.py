@@ -454,6 +454,14 @@ class CheckScreen:
 
     async def save(self, paper, quiet=False):
         result = paper.result
+        # Checked before the student was chosen: move the marked PDF and mistakes into their class folder
+        student_name, class_name = self.student_names.get(paper.student_id, (None, None))
+        try:
+            result["marked_pdf"] = await asyncio.to_thread(
+                tasks.file_for_student, result.get("marked_pdf"), result["marking"], paper.metadata,
+                student_name, class_name, result.get("grade"))
+        except OSError:
+            pass  # the file is open somewhere; the score is still saved
         if paper.result_id:  # checked again: replace the old score instead of adding a second one
             await asyncio.to_thread(tasks.scorebook.delete_result, paper.result_id)
         paper.result_id = await asyncio.to_thread(
@@ -540,11 +548,11 @@ class CheckScreen:
                 awards.append(awarded)
             save_button.disabled = True
             self.app.page.update()
-            student_name, _ = self.student_names.get(paper.student_id, (None, None))
+            student_name, class_name = self.student_names.get(paper.student_id, (None, None))
             try:
                 updated, grade, marked_path = await asyncio.to_thread(
                     tasks.revise_marks, paper.path, paper.metadata, marking, awards, result["marked_pdf"],
-                    student_name, result.get("grade"))
+                    student_name, result.get("grade"), class_name)
             except Exception as error:
                 save_button.disabled = False
                 self.app.toast(str(error), error=True)

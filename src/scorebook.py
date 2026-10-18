@@ -3,13 +3,16 @@ The teacher's score book: classes, students and the results of checked papers.
 
 Stored in a small SQLite database (data/scorebook.db). Classes are grouped under
 qualification dividers (IGCSE, O Level, AS, AS & A Level) automatically, based on
-the papers their students take.
+the papers their students take. Every class and student also gets a folder (see folders.py),
+renamed along with them.
 """
 
 import json
 import os
 import sqlite3
 from datetime import datetime
+
+from src import folders
 
 DB_PATH = os.path.join("data", "scorebook.db")
 QUALIFICATION_ORDER = ["IGCSE", "O Level", "AS", "AS & A Level"]
@@ -58,7 +61,18 @@ def add_class(name, qualification=None):
             cursor = db.execute("INSERT INTO classes (name, qualification) VALUES (?, ?)", (name, qualification))
         except sqlite3.IntegrityError as error:
             raise ValueError(f'There is already a class called "{name}".') from error
-        return cursor.lastrowid
+    folders.class_folder(name)
+    return cursor.lastrowid
+
+
+def _move_paths(db, old_folder, new_folder):
+    """Folders were renamed: point the saved results at the files' new place."""
+    old_prefix = os.path.join(old_folder, "")
+    new_prefix = os.path.join(new_folder, "")
+    for row in db.execute("SELECT id, marked_pdf FROM results WHERE marked_pdf IS NOT NULL").fetchall():
+        path = row["marked_pdf"]
+        if os.path.normcase(path).startswith(os.path.normcase(old_prefix)):
+            db.execute("UPDATE results SET marked_pdf = ? WHERE id = ?", (new_prefix + path[len(old_prefix):], row["id"]))
 
 
 def rename_class(class_id, name):
@@ -66,10 +80,28 @@ def rename_class(class_id, name):
     if not name:
         raise ValueError("Please give the class a name.")
     with connect() as db:
+        old = db.execute("SELECT name FROM classes WHERE id = ?", (class_id,)).fetchone()
         try:
             db.execute("UPDATE classes SET name = ? WHERE id = ?", (name, class_id))
         except sqlite3.IntegrityError as error:
             raise ValueError(f'There is already a class called "{name}".') from error
+        if old:
+            old_folder = folders.class_folder(old["name"], create=False)
+            new_folder = folders.class_folder(name, create=False)
+            folders.rename_folder(old_folder, new_folder)
+            _move_paths(db, old_folder, new_folder)
+
+
+def ensure_folders():
+    """Make a folder for every class and student (for score books from before folders existed)."""
+    with connect() as db:
+        rows = db.execute("""SELECT c.name AS class_name, s.name AS student_name
+                             FROM classes c LEFT JOIN students s ON s.class_id = c.id""").fetchall()
+    for row in rows:
+        try:
+            folders.class_folder(row["class_name"], row["student_name"])
+        except OSError:
+            pass
 
 
 def delete_class(class_id):
@@ -109,7 +141,10 @@ def add_student(class_id, name):
             cursor = db.execute("INSERT INTO students (class_id, name) VALUES (?, ?)", (class_id, name))
         except sqlite3.IntegrityError as error:
             raise ValueError(f'{name} is already in this class.') from error
-        return cursor.lastrowid
+        class_row = db.execute("SELECT name FROM classes WHERE id = ?", (class_id,)).fetchone()
+    if class_row:
+        folders.class_folder(class_row["name"], name)
+    return cursor.lastrowid
 
 
 def rename_student(student_id, name):
@@ -117,10 +152,17 @@ def rename_student(student_id, name):
     if not name:
         raise ValueError("Please type the student's name.")
     with connect() as db:
+        old = db.execute("""SELECT s.name AS student_name, c.name AS class_name FROM students s
+                            JOIN classes c ON c.id = s.class_id WHERE s.id = ?""", (student_id,)).fetchone()
         try:
             db.execute("UPDATE students SET name = ? WHERE id = ?", (name, student_id))
         except sqlite3.IntegrityError as error:
             raise ValueError(f'{name} is already in this class.') from error
+        if old:
+            old_folder = folders.class_folder(old["class_name"], old["student_name"], create=False)
+            new_folder = folders.class_folder(old["class_name"], name, create=False)
+            folders.rename_folder(old_folder, new_folder)
+            _move_paths(db, old_folder, new_folder)
 
 
 def delete_student(student_id):

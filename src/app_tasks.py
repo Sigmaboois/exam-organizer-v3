@@ -11,7 +11,8 @@ import os
 import shutil
 import uuid
 
-from src.gui_common import MARKED_DIR, STAGING_DIR_NAME, safe_name
+from src import folders
+from src.gui_common import STAGING_DIR_NAME
 
 reader = parser = renamer = scraper = None
 cambridge_files = solve_detect = marker = scorebook = reports = None
@@ -31,6 +32,7 @@ def load_backend():
     reader, parser, renamer, scraper = reader_module, parser_module, renamer_module, scraper_module
     cambridge_files, solve_detect, marker = files_module, solve_module, marker_module
     scorebook, reports = scorebook_module, reports_module
+    scorebook.ensure_folders()
 
 
 def refresh_subject_list():
@@ -161,16 +163,30 @@ def check_paper(pdf_path, metadata, student=None, class_name=None, key_override=
 
     say("Making the marked copy…")
     title = paper_heading(metadata)
-    folder = os.path.join(MARKED_DIR, safe_name(class_name or "Not in a class"), safe_name(student or "Unnamed"))
-    file_name = safe_name(f"{metadata.get('subject_name')} P{metadata.get('paper')}{metadata.get('variant')} "
-                          f"{metadata.get('session')} {metadata.get('year')} - marked") + ".pdf"
-    marked_path = _unique_path(os.path.join(folder, file_name))
+    # The student's own folder (Classes/<class>/<student>), with a text file explaining the mistakes
+    if student and class_name:
+        folder = folders.class_folder(class_name, student)
+    else:
+        folder = folders.UNASSIGNED_DIR
+    os.makedirs(folder, exist_ok=True)
+    marked_path = folders.free_marked_path(folder, folders.paper_name(metadata))
     reports.marked_pdf(pdf_path, marking, marked_path, title=title, student=student, grade=grade)
+    folders.write_report(marked_path, marking, metadata, student, class_name, grade)
 
     return {"marking": marking, "grade": grade, "marked_pdf": marked_path, "mark_scheme": mark_scheme}
 
 
-def revise_marks(pdf_path, metadata, marking, awards, marked_path, student=None, grade=None):
+def file_for_student(marked_path, marking, metadata, student, class_name, grade=None):
+    """The student was chosen after checking: move the marked PDF and its report into their folder."""
+    if not (student and class_name):
+        return marked_path
+    new_path = folders.move_into(marked_path, folders.class_folder(class_name, student))
+    if new_path and os.path.exists(new_path):
+        folders.write_report(new_path, marking, metadata, student, class_name, grade)
+    return new_path
+
+
+def revise_marks(pdf_path, metadata, marking, awards, marked_path, student=None, grade=None, class_name=None):
     """
     Apply a teacher's mark edits, work out the grade again and rewrite the marked PDF.
     awards is one integer per question, in order. Returns (marking, grade, marked_path).
@@ -200,6 +216,10 @@ def revise_marks(pdf_path, metadata, marking, awards, marked_path, student=None,
     except PermissionError:
         marked_path = _unique_path(marked_path)
         reports.marked_pdf(pdf_path, updated, marked_path, title=title, student=student, grade=grade)
+    try:
+        folders.write_report(marked_path, updated, metadata, student, class_name, grade)
+    except OSError:
+        pass  # the report is open somewhere; the marked PDF and scores are still updated
     return updated, grade, marked_path
 
 
