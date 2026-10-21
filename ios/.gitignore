@@ -1,0 +1,15 @@
+.DS_Store
+/.build
+/Packages
+/xtool
+/.swiftpm
+xcuserdata/
+DerivedData/
+.netrc
+
+# The Gemini key built into the app. Never commit this, the repo is public
+Sources/ExamOrganizer/Secrets.swift
+
+# Installer logs
+logs/
+.bsp/
