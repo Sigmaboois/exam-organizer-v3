@@ -1,0 +1,14 @@
+.gradle/
+build/
+/local.properties
+/captures
+.idea/
+*.iml
+.kotlin/
+.externalNativeBuild
+.cxx
+# Installer logs
+logs/
+
+# The root .gitignore skips folders called "test"; the detection tests belong in the repo
+!app/src/test/
