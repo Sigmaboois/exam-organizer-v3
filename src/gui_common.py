@@ -179,11 +179,15 @@ def friendly_error(error):
         return "Already sorted. An exam with the same name is already in the destination folder."
     if isinstance(error, PermissionError):
         return "Windows blocked access to this file. Close it if it's open in another program, then try again."
-    if isinstance(error, FileNotFoundError):
-        return "This file was moved or deleted before I could use it."
-    if getattr(error, "winerror", None) == 206 or "too long" in str(error).lower():
+    # Before FileNotFoundError: Python reports a too-long path as one (WinError 206, or 3 for a long folder)
+    long_path = any(isinstance(path, str) and len(path) >= 248
+                    for path in (getattr(error, "filename", None), getattr(error, "filename2", None)))
+    if (getattr(error, "winerror", None) == 206 or "too long" in str(error).lower()
+            or (getattr(error, "winerror", None) == 3 and long_path)):
         return ("The folder path is too long for Windows. Pick a destination closer to the top of "
                 "your drive, like C:\\Exams.")
+    if isinstance(error, FileNotFoundError):
+        return "This file was moved or deleted before I could use it."
     if type(error).__module__.startswith("pypdf"):
         return "This PDF couldn't be opened. It may be damaged or password-protected."
     return f"Something went wrong: {error}"

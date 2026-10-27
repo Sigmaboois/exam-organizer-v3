@@ -45,6 +45,37 @@ final class ScoreBook: ObservableObject {
         var classes: [SchoolClass] = []
         var students: [Student] = []
         var results: [CheckRecord] = []
+        var complete = true    // false if some entries couldn't be read (not saved)
+
+        enum CodingKeys: String, CodingKey { case classes, students, results }
+
+        init(classes: [SchoolClass], students: [Student], results: [CheckRecord]) {
+            self.classes = classes
+            self.students = students
+            self.results = results
+        }
+
+        /// Reads what it can: a missing list or one unreadable entry doesn't lose the rest of the book.
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            let classes = try container.decodeIfPresent([Lossy<SchoolClass>].self, forKey: .classes) ?? []
+            let students = try container.decodeIfPresent([Lossy<Student>].self, forKey: .students) ?? []
+            let results = try container.decodeIfPresent([Lossy<CheckRecord>].self, forKey: .results) ?? []
+            self.classes = classes.compactMap(\.value)
+            self.students = students.compactMap(\.value)
+            self.results = results.compactMap(\.value)
+            complete = self.classes.count == classes.count && self.students.count == students.count
+                && self.results.count == results.count
+        }
+    }
+
+    /// One list entry, or nil if it can't be read (damaged, or from a different version of the app).
+    private struct Lossy<Value: Decodable>: Decodable {
+        var value: Value?
+
+        init(from decoder: Decoder) throws {
+            value = try? decoder.singleValueContainer().decode(Value.self)
+        }
     }
 
     @Published private(set) var classes: [SchoolClass] = []
@@ -52,22 +83,36 @@ final class ScoreBook: ObservableObject {
     @Published private(set) var results: [CheckRecord] = []
 
     private let file: URL
+    private var canSave = true
 
     init(file: URL = AppPaths.support.appendingPathComponent("scorebook.json")) {
         self.file = file
-        if let data = try? Data(contentsOf: file) {
+        if FileManager.default.fileExists(atPath: file.path) {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
-            if let contents = try? decoder.decode(Contents.self, from: data) {
+            let contents = (try? Data(contentsOf: file)).flatMap { try? decoder.decode(Contents.self, from: $0) }
+            if let contents {
                 classes = contents.classes
                 students = contents.students
                 results = contents.results
+            }
+            if contents?.complete != true {
+                keepUnreadableCopy()
             }
         }
         ensureFolders()
     }
 
+    /// Copy a score book that couldn't be read in full ("scorebook (unreadable).json") before a save replaces it.
+    /// If even that fails, nothing is saved over it.
+    private func keepUnreadableCopy() {
+        let name = file.deletingPathExtension().lastPathComponent + " (unreadable).json"
+        let backup = AppPaths.unique(file.deletingLastPathComponent().appendingPathComponent(name))
+        canSave = (try? FileManager.default.copyItem(at: file, to: backup)) != nil
+    }
+
     private func save() {
+        guard canSave else { return }
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

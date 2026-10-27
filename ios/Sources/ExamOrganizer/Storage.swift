@@ -178,6 +178,16 @@ struct Destination: Codable, Equatable {
         return try work(url)
     }
 
+    /// Open the folder for longer than one call (a preview), or nil for the library.
+    /// Close it with stopAccessingSecurityScopedResource() on the returned URL.
+    func startAccess() -> URL? {
+        guard let bookmark else { return nil }
+        var stale = false
+        guard let url = try? URL(resolvingBookmarkData: bookmark, options: [], relativeTo: nil, bookmarkDataIsStale: &stale),
+              url.startAccessingSecurityScopedResource() else { return nil }
+        return url
+    }
+
     static func from(folder url: URL) throws -> Destination {
         let allowed = url.startAccessingSecurityScopedResource()
         defer { if allowed { url.stopAccessingSecurityScopedResource() } }

@@ -10,10 +10,42 @@ The same layout is used by the iPhone/iPad and Android apps.
 """
 
 import os
-import shutil
+import uuid
 from datetime import datetime
 
-BASE_DIR = os.path.join(os.path.expanduser("~"), "Documents", "Exam Organizer")
+
+def _documents_folder():
+    """The real Documents folder (inside OneDrive when its folder backup is on), or ~/Documents."""
+    if os.name == "nt":
+        try:
+            import ctypes
+            folder_id = ctypes.create_string_buffer(uuid.UUID("FDD39AD0-238F-46AF-ADB4-6C85480369C7").bytes_le, 16)
+            path = ctypes.c_wchar_p()
+            if ctypes.windll.shell32.SHGetKnownFolderPath(folder_id, 0, None, ctypes.byref(path)) == 0:
+                try:
+                    if path.value:
+                        return path.value
+                finally:
+                    ctypes.windll.ole32.CoTaskMemFree(path)
+        except Exception:
+            pass
+    return os.path.join(os.path.expanduser("~"), "Documents")
+
+
+def _base_dir():
+    base = os.path.join(_documents_folder(), "Exam Organizer")
+    # Older versions always used ~/Documents. Keep using it if it has anything in it and the real one
+    # isn't there yet, so no file is left behind and the score book's links keep working.
+    old = os.path.join(os.path.expanduser("~"), "Documents", "Exam Organizer")
+    try:
+        if not os.path.exists(base) and os.path.isdir(old) and os.listdir(old):
+            return old
+    except OSError:
+        pass
+    return base
+
+
+BASE_DIR = _base_dir()
 CLASSES_DIR = os.path.join(BASE_DIR, "Classes")
 UNASSIGNED_DIR = os.path.join(BASE_DIR, "Marked", "Not saved to a student")
 
@@ -35,27 +67,66 @@ def class_folder(class_name, student=None, create=True):
 
 
 def rename_folder(old, new):
-    """Rename a folder, merging into the other one if both exist. Returns the new path."""
+    """
+    Rename a folder, merging into the other one if both exist. Returns the moves made, [(from, to)].
+    All or nothing: if a file inside is open in another program, anything already moved is put back
+    and the OSError is raised.
+    """
     if os.path.normcase(os.path.abspath(old)) == os.path.normcase(os.path.abspath(new)):
-        return new
+        return []
     if not os.path.isdir(old):
         os.makedirs(new, exist_ok=True)
-        return new
-    if not os.path.exists(new):
+        return []
+    created = not os.path.exists(new)
+    if created:
         os.makedirs(os.path.dirname(new), exist_ok=True)
         try:
             os.rename(old, new)
-            return new
+            return [(old, new)]
         except OSError:
             pass
     os.makedirs(new, exist_ok=True)
-    for name in os.listdir(old):
-        shutil.move(os.path.join(old, name), unique_path(os.path.join(new, name)))
+    moves = []
+    try:
+        for name in os.listdir(old):
+            source = os.path.join(old, name)
+            if not os.path.lexists(source):
+                continue  # a mistakes report, already moved with its marked PDF
+            if name.endswith(" - mistakes.txt") and os.path.exists(
+                    os.path.join(old, name[: -len(" - mistakes.txt")] + " - marked.pdf")):
+                continue  # moved with its marked PDF
+            if name.endswith(" - marked.pdf"):  # if the name is taken, the PDF and its report get the same number
+                target = free_marked_path(new, name[: -len(" - marked.pdf")])
+                pairs = [(source, target), (report_path(source), report_path(target))]
+            else:
+                pairs = [(source, unique_path(os.path.join(new, name)))]
+            for source, target in pairs:
+                if os.path.lexists(source):
+                    os.rename(source, target)  # a whole file or folder, or nothing
+                    moves.append((source, target))
+    except OSError:
+        undo_moves(moves)
+        if created:
+            try:
+                os.rmdir(new)
+            except OSError:
+                pass
+        raise
     try:
         os.rmdir(old)
     except OSError:
         pass
-    return new
+    return moves
+
+
+def undo_moves(moves):
+    """Put back what rename_folder moved (as far as possible)."""
+    for source, target in reversed(moves):
+        try:
+            os.makedirs(os.path.dirname(source), exist_ok=True)
+            os.rename(target, source)
+        except OSError:
+            pass
 
 
 def unique_path(path):
@@ -72,7 +143,8 @@ def unique_path(path):
 def free_marked_path(folder, base):
     """'<base> - marked.pdf', or '<base> (2) - marked.pdf'… if taken, so its mistakes report gets the same number."""
     candidate, number = base, 2
-    while os.path.exists(os.path.join(folder, f"{candidate} - marked.pdf")):
+    while (os.path.exists(os.path.join(folder, f"{candidate} - marked.pdf"))
+           or os.path.exists(os.path.join(folder, f"{candidate} - mistakes.txt"))):
         candidate = f"{base} ({number})"
         number += 1
     return os.path.join(folder, f"{candidate} - marked.pdf")
@@ -177,8 +249,11 @@ def move_into(marked_pdf, folder):
     os.makedirs(folder, exist_ok=True)
     stem = os.path.splitext(os.path.basename(marked_pdf))[0]
     new_pdf = free_marked_path(folder, stem[: -len(" - marked")] if stem.endswith(" - marked") else stem)
-    shutil.move(marked_pdf, new_pdf)
+    os.rename(marked_pdf, new_pdf)  # same drive; fails cleanly (no half-made copy) while the PDF is open
     report = report_path(marked_pdf)
     if os.path.exists(report):
-        shutil.move(report, report_path(new_pdf))
+        try:
+            os.rename(report, report_path(new_pdf))
+        except OSError:
+            pass  # the report is written again next to the PDF
     return new_pdf

@@ -1,5 +1,7 @@
 package com.gasserelshafei.examorganizer
 
+import android.os.Handler
+import android.os.Looper
 import androidx.compose.runtime.mutableStateListOf
 import org.json.JSONArray
 import org.json.JSONObject
@@ -79,17 +81,17 @@ class ScoreBook(private val file: File, private val store: Store) {
     /** Make folders for every class and student (in the background: the folder may be on Google Drive). */
     fun ensureFolders() {
         val snapshot = classes.toList() to students.toList()
-        Thread {
+        folderWork.execute {
             for (schoolClass in snapshot.first) {
                 runCatching { store.folder(ClassFolders.path(schoolClass.name)) }
                 snapshot.second.filter { it.classId == schoolClass.id }.forEach {
                     runCatching { store.folder(ClassFolders.path(schoolClass.name, it.name)) }
                 }
             }
-        }.start()
+        }
     }
 
-    private fun makeFolder(path: List<String>) = Thread { runCatching { store.folder(path) } }.start()
+    private fun makeFolder(path: List<String>) = folderWork.execute { runCatching { store.folder(path) } }
 
     // ---------- classes ----------
 
@@ -111,9 +113,12 @@ class ScoreBook(private val file: File, private val store: Store) {
         val index = classes.indexOfFirst { it.id == id }.takeIf { it >= 0 } ?: return
         val old = classes[index].name
         classes[index] = classes[index].copy(name = name)
-        relocate("${ClassFolders.ROOT}/${Store.safeName(old)}/", "${ClassFolders.ROOT}/${Store.safeName(name)}/")
         save()
-        Thread { runCatching { store.rename(ClassFolders.path(old), name) || store.folder(ClassFolders.path(name)) != null } }.start()
+        folderWork.execute {
+            val moves = runCatching { store.rename(ClassFolders.path(old), name) }.getOrDefault(emptyMap())
+            runCatching { store.folder(ClassFolders.path(name)) }
+            relocate(moves)
+        }
     }
 
     fun deleteClass(id: String) {
@@ -148,12 +153,12 @@ class ScoreBook(private val file: File, private val store: Store) {
         return added
     }
 
-    /** One name per line (commas work too). Returns (added, skipped as already there). */
+    /** One name per line ("Smith, John" is one student, as on the desktop). Returns (added, skipped as already there). */
     fun addStudents(text: String, classId: String): Pair<Int, Int> {
         var added = 0
         var skipped = 0
         val className = schoolClass(classId)?.name
-        for (name in text.split('\n', ',', ';', '\t').map { it.trim() }.filter { it.isNotEmpty() }) {
+        for (name in text.lines().map { it.trim() }.filter { it.isNotEmpty() }) {
             if (students.any { it.classId == classId && same(it.name, name) }) skipped++
             else {
                 students += Student(classId = classId, name = name)
@@ -176,9 +181,7 @@ class ScoreBook(private val file: File, private val store: Store) {
         students[index] = student.copy(name = name)
         val className = schoolClass(student.classId)?.name
         if (className != null) {
-            val base = "${ClassFolders.ROOT}/${Store.safeName(className)}/"
-            relocate(base + Store.safeName(student.name) + "/", base + Store.safeName(name) + "/")
-            Thread { runCatching { store.rename(ClassFolders.path(className, student.name), name) } }.start()
+            folderWork.execute { relocate(runCatching { store.rename(ClassFolders.path(className, student.name), name) }.getOrDefault(emptyMap())) }
         }
         save()
     }
@@ -200,12 +203,22 @@ class ScoreBook(private val file: File, private val store: Store) {
         return ClassFolders.path(schoolClass.name, student.name)
     }
 
-    /** Folders were renamed: point the saved results at the files' new place. */
-    private fun relocate(oldPrefix: String, newPrefix: String) {
-        for (i in results.indices) {
-            val r = results[i]
-            fun moved(path: String?) = if (path != null && path.startsWith(oldPrefix)) newPrefix + path.removePrefix(oldPrefix) else path
-            results[i] = r.copy(markedPdf = moved(r.markedPdf), report = moved(r.report))
+    /** Folders were renamed (in the background): point the saved results at where the files really went. */
+    private fun relocate(moves: Map<String, String>) {
+        if (moves.isEmpty()) return
+        Handler(Looper.getMainLooper()).post {
+            for (i in results.indices) {
+                val r = results[i]
+                fun moved(path: String?): String? {
+                    if (path == null) return null
+                    val (from, to) = moves.entries.firstOrNull { (old, _) ->
+                        if (old.endsWith("/")) path.startsWith(old, ignoreCase = true) else path.equals(old, ignoreCase = true)
+                    } ?: return path
+                    return to + path.substring(from.length)
+                }
+                results[i] = r.copy(markedPdf = moved(r.markedPdf), report = moved(r.report))
+            }
+            save()
         }
     }
 
@@ -266,6 +279,9 @@ class ScoreBook(private val file: File, private val store: Store) {
     }
 
     companion object {
+        /** Folder work runs one job at a time: two at once could both create "Classes/<class>" and leave a "<class> (1)". */
+        private val folderWork = java.util.concurrent.Executors.newSingleThreadExecutor()
+
         fun average(records: List<CheckRecord>): Double? = records.mapNotNull { it.percent }.takeIf { it.isNotEmpty() }?.average()
 
         fun topicsRecorded(records: List<CheckRecord>) = records.any { r -> r.marking.questions.any { it.topic.isNotBlank() } }

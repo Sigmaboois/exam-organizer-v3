@@ -4,21 +4,28 @@ import json
 import re
 import os
 
+TIMEOUT = 30
+# Each of these comes from its own page, so an empty one means that page couldn't be read
+REQUIRED = ("IGCSE", "O Level", "AS & A Level")
+
 def search():
     subname_code = {} 
     igcse_url = r"https://www.cambridgeinternational.org/programmes-and-qualifications/cambridge-upper-secondary/cambridge-igcse/subjects/"
     o_level_url = r"https://www.cambridgeinternational.org/programmes-and-qualifications/cambridge-upper-secondary/cambridge-o-level/subjects/"
     as_alevel_url = r"https://www.cambridgeinternational.org/programmes-and-qualifications/cambridge-advanced/cambridge-international-as-and-a-levels/subjects/"
 
-    o_level_website = requests.get(o_level_url)
+    o_level_website = requests.get(o_level_url, timeout=TIMEOUT)
+    o_level_website.raise_for_status()
     o_level_text = BeautifulSoup.BeautifulSoup(o_level_website.text,"html.parser")
     extracted_o_level_text = o_level_text.find_all("a")
 
-    a_level_website = requests.get(as_alevel_url)
+    a_level_website = requests.get(as_alevel_url, timeout=TIMEOUT)
+    a_level_website.raise_for_status()
     a_level_text = BeautifulSoup.BeautifulSoup(a_level_website.text,"html.parser")
     extracted_a_level_text = a_level_text.find_all("a")
 
-    igcse_website = requests.get(igcse_url)
+    igcse_website = requests.get(igcse_url, timeout=TIMEOUT)
+    igcse_website.raise_for_status()
     igcse_text = BeautifulSoup.BeautifulSoup(igcse_website.text,"html.parser")
     extracted_igcse_text = igcse_text.find_all("a")
     code_pattern = r"\d{4}"
@@ -79,9 +86,13 @@ def search():
 
 
 def generate_file(subjects):
+    # Never replace a good subject list with an empty one, or leave a half-written file behind
+    if not isinstance(subjects, dict) or not all(subjects.get(qualification) for qualification in REQUIRED):
+        raise ValueError("Cambridge's subject pages couldn't be read, so the subject list wasn't changed.")
     os.makedirs("data",exist_ok=True)
-    with open("data/subjects.json","w",encoding="utf-8") as file:
+    with open("data/subjects.json.tmp","w",encoding="utf-8") as file:
         json.dump(subjects,file,indent=4,ensure_ascii=False)
+    os.replace("data/subjects.json.tmp","data/subjects.json")
 
 
 

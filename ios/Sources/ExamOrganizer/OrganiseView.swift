@@ -15,6 +15,7 @@ struct OrganiseView: View {
     @State private var pickerShown = false
     @State private var editing: SheetID?
     @State private var preview: URL?
+    @State private var previewAccess: URL?    // the picked folder, kept open while its sorted copy is shown
 
     var body: some View {
         ScrollView {
@@ -63,6 +64,12 @@ struct OrganiseView: View {
             }
         }
         .pdfPreview($preview)
+        .onChange(of: preview) {
+            if preview == nil {
+                previewAccess?.stopAccessingSecurityScopedResource()
+                previewAccess = nil
+            }
+        }
     }
 
     // MARK: Cards
@@ -143,7 +150,7 @@ struct OrganiseView: View {
                         ExamRow(item: item,
                                 onFix: { editing = SheetID(id: item.id) },
                                 onCheck: { model.sendToCheck(item.id) },
-                                onPreview: { preview = item.sortedTo ?? item.file },
+                                onPreview: { showPreview(item) },
                                 onShow: {
                                     if let folder = item.sortedTo?.deletingLastPathComponent(),
                                        let url = filesAppURL(for: folder) {
@@ -155,6 +162,13 @@ struct OrganiseView: View {
                 }
             }
         }
+    }
+
+    /// A copy sorted into a picked folder can only be read while that folder is open.
+    private func showPreview(_ item: ExamItem) {
+        previewAccess?.stopAccessingSecurityScopedResource()
+        previewAccess = item.sortedTo == nil ? nil : item.sortedInto?.startAccess()
+        preview = item.sortedTo ?? item.file
     }
 
     // MARK: Files picker

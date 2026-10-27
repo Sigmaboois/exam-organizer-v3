@@ -15,6 +15,7 @@ dependencies = [
     "pypdfium2",   # renders PDF pages (answer detection, AI checking)
     "pillow",      # compares rendered pages
     "openpyxl",    # spreadsheet export
+    "neonize==0.5.2",  # sends lesson links to WhatsApp groups (links like WhatsApp Web)
 ]
 
 [dependency-groups]

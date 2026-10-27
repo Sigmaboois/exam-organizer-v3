@@ -275,7 +275,7 @@ private fun ResultRow(state: AppState, record: CheckRecord) {
         Text("${record.score}/${record.maxScore}", fontWeight = FontWeight.SemiBold)
         record.grade?.let { Pill(it) }
         IconButton(onClick = { showReport = true }) { Icon(Icons.Outlined.ListAlt, "Mistakes") }
-        IconButton(onClick = { state.viewIntent(record.markedPdf)?.let { runCatching { context.startActivity(it) } } ?: state.show("The marked copy isn't in the folder any more.", true) }) {
+        IconButton(onClick = { state.open(context, record.markedPdf, missing = "The marked copy isn't in the folder any more.") }) {
             Icon(Icons.Outlined.PictureAsPdf, "Open marked copy")
         }
         IconButton(onClick = { deleting = true }) { Icon(Icons.Outlined.Delete, "Delete this result") }

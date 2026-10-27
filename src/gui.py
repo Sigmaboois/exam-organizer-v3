@@ -5,6 +5,7 @@ Three screens, picked from the side menu:
     Organise      drop Cambridge papers, check what was detected, sort them into folders
     Check papers  mark solved papers against the official mark scheme with an AI examiner
     Classes       classes, students and their scores (the score book)
+    Online lessons  each class's Zoom link, sent to its WhatsApp group before every lesson
 """
 
 import asyncio
@@ -18,11 +19,12 @@ from src.gui_check import CheckScreen
 from src.gui_classes import ClassesScreen
 from src.folders import CLASSES_DIR
 from src.gui_common import BRAND_COLOR, open_in_explorer
+from src.gui_lessons import LessonsScreen
 from src.gui_organise import OrganiseScreen
 
 APP_NAME = "Exam Organizer"
 GET_KEY_URL = "https://aistudio.google.com/apikey"
-SCREENS = ["organise", "check", "classes"]
+SCREENS = ["organise", "check", "classes", "lessons"]
 
 
 class App:
@@ -34,7 +36,7 @@ class App:
         self.picker = ft.FilePicker()
         self.backend_ready = asyncio.Event()
         self.gemini_key = None   # a teacher's own key from Settings, if they added one
-        self.organise = self.check = self.classes = None
+        self.organise = self.check = self.classes = self.lessons = None
         self.go_to = lambda name: None
 
     def toast(self, message, error=False):
@@ -60,7 +62,8 @@ async def main(page: ft.Page):
     app.organise = OrganiseScreen(app)
     app.check = CheckScreen(app)
     app.classes = ClassesScreen(app)
-    screens = {"organise": app.organise, "check": app.check, "classes": app.classes}
+    app.lessons = LessonsScreen(app)
+    screens = {"organise": app.organise, "check": app.check, "classes": app.classes, "lessons": app.lessons}
 
     # ---------- side menu ----------
 
@@ -71,6 +74,8 @@ async def main(page: ft.Page):
         content.content = screens[name].view
         rail.selected_index = SCREENS.index(name)
         page.update()
+        if name == "lessons":
+            page.run_task(app.lessons.refresh)   # classes may have changed on the Classes screen
 
     app.go_to = go_to
     rail = ft.NavigationRail(
@@ -85,6 +90,8 @@ async def main(page: ft.Page):
                                          label="Check papers"),
             ft.NavigationRailDestination(icon=ft.Icons.GROUPS_OUTLINED, selected_icon=ft.Icons.GROUPS,
                                          label="Classes"),
+            ft.NavigationRailDestination(icon=ft.Icons.VIDEO_CALL_OUTLINED, selected_icon=ft.Icons.VIDEO_CALL,
+                                         label="Online lessons"),
         ],
         on_change=lambda e: go_to(SCREENS[e.control.selected_index]),
     )
@@ -128,6 +135,10 @@ async def main(page: ft.Page):
                 heading("Classes"),
                 ft.Text("Create classes and add students. Checked papers are saved to each student's scores, "
                         "and you can export everything to a spreadsheet."),
+                heading("Online lessons"),
+                ft.Text("Paste each class's Zoom link once, pick its WhatsApp group and add its lesson times. "
+                        "Before every lesson the link is sent to the group from your WhatsApp, as long as the "
+                        "app is open (minimised is fine)."),
                 ft.Divider(),
                 note("Works with Cambridge (CAIE) IGCSE, O Level and AS & A Level. Inserts, examiner reports "
                      "and grade threshold files are sorted too. Only question papers can be checked."),
@@ -231,6 +242,8 @@ async def main(page: ft.Page):
             banner_ring.visible = False
             banner.bgcolor = ft.Colors.ERROR_CONTAINER
             page.update()
+            if tasks.scorebook is not None:  # the score book loads before the download, so classes can still show
+                await app.classes.refresh()
             return
         app.backend_ready.set()
         banner.visible = False
@@ -258,6 +271,7 @@ async def main(page: ft.Page):
 
     app.organise.start_workers()
     app.check.start_workers()
+    app.lessons.start()
     await start_backend()
 
 

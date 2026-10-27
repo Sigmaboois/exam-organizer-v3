@@ -3,6 +3,7 @@ package com.gasserelshafei.examorganizer
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.core.content.FileProvider
 import androidx.documentfile.provider.DocumentFile
 import java.io.File
@@ -39,12 +40,18 @@ class Store(private val context: Context) {
         return DocumentFile.fromFile(own)
     }
 
+    /** The item called [name] in [folder], ignoring case like the storage does ("exams" is "Exams"). */
+    private fun find(folder: DocumentFile, name: String): DocumentFile? {
+        val items = folder.listFiles().map { it to it.name }
+        return (items.firstOrNull { it.second == name } ?: items.firstOrNull { it.second.equals(name, ignoreCase = true) })?.first
+    }
+
     /** A folder at this path below the root, created if needed. */
     fun folder(path: List<String>, create: Boolean = true): DocumentFile? {
         var current = root()
         for (raw in path) {
             val name = safeName(raw)
-            current = current.findFile(name)?.takeIf { it.isDirectory }
+            current = find(current, name)?.takeIf { it.isDirectory }
                 ?: (if (create) current.createDirectory(name) else null)
                 ?: return null
         }
@@ -54,7 +61,7 @@ class Store(private val context: Context) {
     fun file(path: String?): DocumentFile? {
         if (path.isNullOrBlank()) return null
         val parts = path.split('/')
-        return folder(parts.dropLast(1), create = false)?.findFile(parts.last())?.takeIf { it.isFile }
+        return folder(parts.dropLast(1), create = false)?.let { find(it, parts.last()) }?.takeIf { it.isFile }
     }
 
     /** Copy a local file into a folder below the root. Returns its relative path. */
@@ -62,39 +69,82 @@ class Store(private val context: Context) {
         val folder = folder(path) ?: throw UserError("I couldn't create the folder ${path.joinToString("/")}.")
         val safe = safeName(name)
         val relative = (path.map(::safeName) + safe).joinToString("/")
+        // The new copy is written in full (under another name while an old one is there) before the old one goes,
+        // and a failed write leaves no half-written file behind
         if (folder.uri.scheme == "file") {
             // The app's own storage: plain files (DocumentFile would add a second ".pdf")
             val target = File(folder.uri.path!!, safe)
             if (target.exists() && !replace) throw UserError("Already sorted. An exam with the same name is already in that folder.")
-            source.copyTo(target, overwrite = true)
+            val temp = File(target.parentFile, "Saving - $safe")
+            try {
+                source.copyTo(temp, overwrite = true)
+                if (!temp.renameTo(target)) throw UserError("I couldn't save $safe.")
+            } catch (error: Exception) {
+                temp.delete()
+                throw error
+            }
             return relative
         }
-        folder.findFile(safe)?.let { existing ->
-            if (!replace) throw UserError("Already sorted. An exam with the same name is already in that folder.")
-            existing.delete()
+        val existing = find(folder, safe)
+        if (existing != null && !replace) throw UserError("Already sorted. An exam with the same name is already in that folder.")
+        val target = folder.createFile(mime, if (existing == null) safe else "Saving - $safe") ?: throw UserError("I couldn't save $safe.")
+        try {
+            context.contentResolver.openOutputStream(target.uri, "w")?.use { out -> source.inputStream().use { it.copyTo(out) } }
+                ?: throw UserError("I couldn't save $safe.")
+        } catch (error: Exception) {
+            target.delete()
+            throw error
         }
-        val target = folder.createFile(mime, safe) ?: throw UserError("I couldn't save $safe.")
-        context.contentResolver.openOutputStream(target.uri, "w")?.use { out -> source.inputStream().use { it.copyTo(out) } }
-            ?: throw UserError("I couldn't save $safe.")
+        if (existing != null) {
+            existing.delete()
+            target.renameTo(safe)
+        }
         return (path.map(::safeName) + (target.name ?: safe)).joinToString("/")
     }
 
     /** A name that isn't taken yet in that folder: "x.pdf", "x (2).pdf"… */
     fun freeName(path: List<String>, name: String): String {
         val folder = folder(path) ?: return name
-        if (folder.findFile(name) == null) return name
+        if (find(folder, name) == null) return name
         val stem = name.substringBeforeLast('.')
         val ext = name.substringAfterLast('.', "")
         var number = 2
-        while (folder.findFile("$stem ($number)${if (ext.isEmpty()) "" else ".$ext"}") != null) number++
+        while (find(folder, "$stem ($number)${if (ext.isEmpty()) "" else ".$ext"}") != null) number++
         return "$stem ($number)${if (ext.isEmpty()) "" else ".$ext"}"
     }
 
-    fun rename(path: List<String>, newName: String): Boolean {
-        val folder = folder(path, create = false) ?: return false
-        if (folder.parentFile?.findFile(safeName(newName)) != null) return false
-        return folder.renameTo(safeName(newName))
+    /**
+     * Rename a folder. If the name is taken (e.g. by a deleted student's folder) its contents move into that
+     * folder instead, as the desktop app does; anything whose name is taken there too stays put.
+     * Returns what really moved (old relative path -> new, folders ending in "/"), so saved paths stay right.
+     */
+    fun rename(path: List<String>, newName: String): Map<String, String> {
+        val folder = folder(path, create = false) ?: return emptyMap()
+        val parent = folder.parentFile ?: return emptyMap()
+        val safe = safeName(newName)
+        val old = path.joinToString("/", postfix = "/") { safeName(it) }
+        fun at(name: String) = (path.dropLast(1).map(::safeName) + name).joinToString("/", postfix = "/")
+        val other = find(parent, safe)
+        if (other == null) return if (folder.renameTo(safe)) mapOf(old to at(folder.name ?: safe)) else emptyMap()
+        // Only the case changes (names are matched ignoring case, as on the desktop) or a file has that name: keep the folder
+        if (other.uri == folder.uri || !other.isDirectory) return emptyMap()
+        val taken = other.listFiles().mapNotNull { it.name?.lowercase() }.toSet()
+        val new = at(other.name ?: safe)
+        val moves = mutableMapOf<String, String>()
+        for (item in folder.listFiles()) {
+            val name = item.name ?: continue
+            val end = if (item.isDirectory) "/" else ""
+            if (name.lowercase() !in taken && move(item, folder, other)) moves[old + name + end] = new + name + end
+        }
+        if (folder.listFiles().isEmpty()) folder.delete()
+        return moves
     }
+
+    /** Move a file or folder into another folder, keeping its name. */
+    private fun move(item: DocumentFile, from: DocumentFile, to: DocumentFile): Boolean = runCatching {
+        if (item.uri.scheme == "file") File(item.uri.path!!).renameTo(File(to.uri.path!!, item.name!!))
+        else DocumentsContract.moveDocument(context.contentResolver, item.uri, from.uri, to.uri) != null
+    }.getOrDefault(false)
 
     /** A copy of a stored file in the app's cache (to read it as a normal file). */
     fun localCopy(path: String): File? {

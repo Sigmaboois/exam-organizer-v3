@@ -1,6 +1,7 @@
 package com.gasserelshafei.examorganizer
 
 import android.app.Application
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.runtime.getValue
@@ -13,14 +14,17 @@ import androidx.lifecycle.viewModelScope
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 
-enum class Screen(val title: String) { ORGANISE("Organise"), CHECK("Check papers"), CLASSES("Classes") }
+enum class Screen(val title: String) { ORGANISE("Organise"), CHECK("Check papers"), CLASSES("Classes"), LESSONS("Lessons") }
 
 enum class ExamStatus { WAITING, READING, READY, PROBLEM, SORTING, SORTED }
 
@@ -100,10 +104,14 @@ class AppState(application: Application) : AndroidViewModel(application) {
     private var readingExams = false
     private var readingPapers = false
     private var checking = false
+    private val saveLock = Mutex()   // marked copies are saved one at a time, as on the desktop
+    val revising = mutableStateListOf<String>()   // papers whose corrections are being saved
 
     init {
         Imports.clearAll(application)   // working copies from last time aren't in any list any more
+        File(application.filesDir, "marked").deleteRecursively()   // nor are the marked copies
         scoreBook.ensureFolders()
+        LessonAlarms.schedule(application)   // e.g. after the app was updated
     }
 
     fun show(message: String, error: Boolean = false) { toast = Toast(message, error) }
@@ -124,7 +132,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
 
     private fun localUri(file: File): Uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
 
-    /** An intent that opens a saved file (path in the chosen folder) or a local file in another app. */
+    /** An intent that opens a saved file (path in the chosen folder) or a local file in another app. Searches the folder: call off the main thread. */
     fun viewIntent(path: String?, local: File? = null, mime: String = "application/pdf"): Intent? {
         val uri = when {
             path != null -> store.file(path)?.let(store::shareUri)
@@ -134,14 +142,27 @@ class AppState(application: Application) : AndroidViewModel(application) {
         return Intent(Intent.ACTION_VIEW).setDataAndType(uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
 
+    /** Open a saved (or local) file in another app, finding it in the background (the folder may be on Google Drive). */
+    fun open(context: Context, path: String?, local: File? = null, missing: String? = null) {
+        viewModelScope.launch {
+            val intent = withContext(Dispatchers.IO) { viewIntent(path, local) }
+            if (intent != null) runCatching { context.startActivity(intent) } else missing?.let { show(it, true) }
+        }
+    }
+
     fun shareIntent(file: File, mime: String): Intent = Intent.createChooser(
         Intent(Intent.ACTION_SEND).setType(mime).putExtra(Intent.EXTRA_STREAM, localUri(file))
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "Share")
 
-    fun shareSaved(path: String?, mime: String): Intent? {
-        val document = store.file(path) ?: return null
-        return Intent.createChooser(Intent(Intent.ACTION_SEND).setType(mime).putExtra(Intent.EXTRA_STREAM, store.shareUri(document))
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "Share")
+    /** Share a saved file, finding it in the background. */
+    fun shareSaved(context: Context, path: String?, mime: String) {
+        viewModelScope.launch {
+            val uri = withContext(Dispatchers.IO) { store.file(path)?.let(store::shareUri) } ?: return@launch
+            runCatching {
+                context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType(mime).putExtra(Intent.EXTRA_STREAM, uri)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), "Share"))
+            }
+        }
     }
 
     fun readSavedText(path: String?): String? = runCatching { store.localCopy(path ?: return null)?.readText() }.getOrNull()
@@ -240,10 +261,13 @@ class AppState(application: Application) : AndroidViewModel(application) {
 
     fun sendToCheck(id: String) {
         val item = exams.firstOrNull { it.id == id } ?: return
-        val copy = runCatching { Imports.copy(context, item.file, item.name) }.getOrNull() ?: return show("Couldn't copy this paper.", true)
-        papers += CheckPaper(file = copy, name = item.name, metadata = item.metadata, answers = item.answers)
-        screen = Screen.CHECK
-        readPapers()
+        viewModelScope.launch {
+            val copy = withContext(Dispatchers.IO) { runCatching { Imports.copy(context, item.file, item.name) }.getOrNull() }
+                ?: return@launch show("Couldn't copy this paper.", true)
+            papers += CheckPaper(file = copy, name = item.name, metadata = item.metadata, answers = item.answers)
+            screen = Screen.CHECK
+            readPapers()
+        }
     }
 
     private fun readExams() {
@@ -330,10 +354,11 @@ class AppState(application: Application) : AndroidViewModel(application) {
         if (paper.status == PaperStatus.CHECKING) return
         papers.remove(paper)
         Imports.remove(context, paper.file)
+        dropMarked(paper.outcome?.local)
     }
 
     fun clearPapers() {
-        papers.filter { it.status != PaperStatus.CHECKING }.forEach { Imports.remove(context, it.file) }
+        papers.filter { it.status != PaperStatus.CHECKING }.forEach { Imports.remove(context, it.file); dropMarked(it.outcome?.local) }
         papers.removeAll { it.status != PaperStatus.CHECKING }
     }
 
@@ -424,6 +449,12 @@ class AppState(application: Application) : AndroidViewModel(application) {
 
     private fun markedFile(): File = File(context.filesDir, "marked/${UUID.randomUUID()}.pdf").apply { parentFile?.mkdirs() }
 
+    /** Delete a marked copy no paper needs any more, after any save still copying it (only ever one in the app's "marked" folder). */
+    private fun dropMarked(file: File?) {
+        if (file == null || file.parentFile != File(context.filesDir, "marked")) return
+        viewModelScope.launch { saveLock.withLock { withContext(Dispatchers.IO) { file.delete() } } }
+    }
+
     private suspend fun check(id: String) {
         val paper = paper(id) ?: return
         val metadata = paper.metadata ?: return
@@ -455,6 +486,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
             val current = paper(id)
             if (current?.studentId != null && !current.dontSave) save(id, quiet = true)
             else storeOutcome(id)   // keep a copy in "Not saved to a student"
+            dropMarked(paper.outcome?.local)   // checked again: the earlier marked copy is replaced
             lastResult = "${metadata.title}: ${finalMarking.total}/${finalMarking.maxTotal}" + (finalGrade?.let { ", grade $it" } ?: "")
         } catch (error: Exception) {
             updatePaper(id) { it.copy(status = PaperStatus.PROBLEM, message = friendlyMessage(error), progress = "") }
@@ -471,7 +503,8 @@ class AppState(application: Application) : AndroidViewModel(application) {
         val className = scoreBook.schoolClass(student?.classId)?.name
         val folder = scoreBook.folder(student?.id) ?: listOf(ClassFolders.UNASSIGNED)
         viewModelScope.launch {
-            val saved = withContext(Dispatchers.IO) {
+            // One at a time: two checked copies of one exam for one student must not both pick the same free name
+            val saved = saveLock.withLock { withContext(Dispatchers.IO) {
                 runCatching {
                     // Re-saving (corrected marks) replaces the earlier copy; a new check of the same paper gets
                     // "<paper> (2) - marked.pdf" with its own "<paper> (2) - mistakes.txt"
@@ -496,7 +529,7 @@ class AppState(application: Application) : AndroidViewModel(application) {
                     }
                     outcome.copy(savedPdf = pdf, report = report)
                 }.getOrNull()
-            }
+            } }
             if (saved != null) {
                 updatePaper(id) { it.copy(outcome = saved) }
                 onSaved(saved)
@@ -511,17 +544,35 @@ class AppState(application: Application) : AndroidViewModel(application) {
         val paper = paper(id) ?: return
         val studentId = paper.studentId ?: return
         val metadata = paper.metadata ?: return
-        storeOutcome(id) { outcome ->
-            val current = paper(id) ?: return@storeOutcome
-            current.resultId?.let { scoreBook.deleteResult(it) }
-            val resultId = scoreBook.saveResult(studentId, metadata, outcome.marking, outcome.grade, outcome.savedPdf, outcome.report)
-            updatePaper(id) { it.copy(resultId = resultId) }
-            if (!quiet) show("Saved to ${scoreBook.student(studentId)?.name ?: "the student"}'s scores.")
+        val outcome = paper.outcome ?: return
+        // The score is kept even if the folder can't be written (storeOutcome says so), as on the desktop
+        paper.resultId?.let { scoreBook.deleteResult(it) }
+        val resultId = scoreBook.saveResult(studentId, metadata, outcome.marking, outcome.grade, outcome.savedPdf, outcome.report)
+        updatePaper(id) { it.copy(resultId = resultId) }
+        if (!quiet) show("Saved to ${scoreBook.student(studentId)?.name ?: "the student"}'s scores.")
+        storeOutcome(id) { saved -> scoreBook.updateResult(resultId, saved.marking, saved.grade, saved.savedPdf, saved.report) }
+    }
+
+    /** Save corrections in the app's scope, so closing Results or turning the phone can't stop them halfway. */
+    fun saveCorrections(id: String, awards: List<Int>) {
+        if (id in revising) return
+        revising += id
+        viewModelScope.launch {
+            try {
+                revise(id, awards)
+                show("Corrections saved.")
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                show(friendlyMessage(error), true)
+            } finally {
+                revising -= id
+            }
         }
     }
 
     /** Apply a teacher's mark changes: regrade, redraw the marked PDF and update the score book. */
-    suspend fun revise(id: String, awards: List<Int>) {
+    private suspend fun revise(id: String, awards: List<Int>) {
         val paper = paper(id) ?: return
         val outcome = paper.outcome ?: return
         val metadata = paper.metadata ?: return
@@ -542,6 +593,8 @@ class AppState(application: Application) : AndroidViewModel(application) {
         val finalGrade = grade
         withContext(Dispatchers.IO) { MarkedPdf.make(paper.file, finalMarking, outcome.local, metadata.heading, studentName, finalGrade) }
         updatePaper(id) { it.copy(outcome = outcome.copy(marking = finalMarking, grade = finalGrade)) }
+        // The score book takes the new marks even if the folder can't be written (storeOutcome says so)
+        paper(id)?.resultId?.let { scoreBook.updateResult(it, finalMarking, finalGrade, null, null) }
         storeOutcome(id) { saved ->
             paper(id)?.resultId?.let { scoreBook.updateResult(it, saved.marking, saved.grade, saved.savedPdf, saved.report) }
         }

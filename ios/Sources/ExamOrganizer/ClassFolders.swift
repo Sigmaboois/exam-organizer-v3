@@ -38,7 +38,10 @@ enum ClassFolders {
         for item in (try? manager.contentsOfDirectory(at: from, includingPropertiesForKeys: nil)) ?? [] {
             try? manager.moveItem(at: item, to: AppPaths.unique(to.appendingPathComponent(item.lastPathComponent)))
         }
-        try? manager.removeItem(at: from)
+        // Only once it's empty, so files that couldn't be moved aren't deleted
+        if (try? manager.contentsOfDirectory(atPath: from.path))?.isEmpty == true {
+            try? manager.removeItem(at: from)
+        }
     }
 
     static func renameClass(from old: String, to new: String) {

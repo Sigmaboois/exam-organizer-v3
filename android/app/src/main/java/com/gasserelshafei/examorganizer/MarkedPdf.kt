@@ -22,17 +22,18 @@ object MarkedPdf {
     private val regular: PDFont get() = PDType1Font.HELVETICA
     private val bold: PDFont get() = PDType1Font.HELVETICA_BOLD
 
-    /** Helvetica only has Western characters: swap or drop the rest so drawing never fails. */
+    /** Helvetica only has Western (WinAnsi) characters: swap or drop the rest so drawing never fails. */
     private fun safe(text: String): String = buildString {
         for (c in text.replace('\n', ' ')) {
-            append(when (c) {
-                '‘', '’' -> '\''
-                '“', '”' -> '"'
-                '–', '—', '−' -> '-'
-                '×' -> 'x'
-                '\t' -> ' '
-                else -> if (c.code in 32..126 || c.code in 160..255) c else '?'
-            })
+            when (c) {
+                '‘', '’' -> append('\'')
+                '“', '”' -> append('"')
+                '–', '—', '−' -> append('-')
+                '×' -> append('x')
+                '\t', '\u00A0' -> append(' ')   // PDFBox's WinAnsi has no non-breaking space
+                '\u00AD' -> {}                  // nor a soft hyphen (invisible anyway)
+                else -> append(if (c.code in 32..126 || c.code in 161..255) c else '?')
+            }
         }
     }
 

@@ -74,8 +74,18 @@ class ClassesScreen:
 
     # ---------- loading ----------
 
+    def _book_ready(self, say=True):
+        """The score book loads in the background at start-up; until then, say so instead of failing."""
+        if tasks.scorebook is None:
+            if say:
+                self.app.toast("Still getting ready, please try again in a moment.")
+            return False
+        return True
+
     async def refresh(self):
         """Reload classes, the selected class's students, and the Check screen's student pickers."""
+        if not self._book_ready(say=False):
+            return
         groups = await asyncio.to_thread(tasks.scorebook.classes_by_qualification)
         controls = []
         all_classes = {}
@@ -193,8 +203,10 @@ class ClassesScreen:
     def _student_tile(self, student, results):
         if results:
             latest = results[0]
+            # No average when every saved paper is out of 0 (from before such results were refused)
+            average = f"average {student['average']:.0f}% · " if student["average"] is not None else ""
             subtitle = (f"{len(results)} paper{'s' if len(results) != 1 else ''} checked · "
-                        f"average {student['average']:.0f}% · latest {latest['score']}/{latest['max_score']}"
+                        f"{average}latest {latest['score']}/{latest['max_score']}"
                         + (f" ({latest['grade']})" if latest["grade"] else ""))
         else:
             subtitle = "No papers checked yet"
@@ -290,8 +302,10 @@ class ClassesScreen:
         await self.refresh()
 
     async def _paste_students(self, e):
-        if not self.selected_class:
+        if not self.selected_class or not self._book_ready():
             return
+        # The class chosen now: another one may be clicked while the names are being added
+        class_id = self.selected_class["id"]
         box = ft.TextField(label="Student names", multiline=True, min_lines=6, max_lines=12,
                            hint_text="One name per line")
 
@@ -303,7 +317,7 @@ class ClassesScreen:
             added = skipped = 0
             for name in names:
                 try:
-                    await asyncio.to_thread(tasks.scorebook.add_student, self.selected_class["id"], name)
+                    await asyncio.to_thread(tasks.scorebook.add_student, class_id, name)
                     added += 1
                 except ValueError:
                     skipped += 1
@@ -319,6 +333,8 @@ class ClassesScreen:
         ))
 
     async def _add_class(self, e):
+        if not self._book_ready():
+            return
         try:
             class_id = await asyncio.to_thread(tasks.scorebook.add_class, self.new_class_field.value or "")
         except ValueError as error:
@@ -329,7 +345,7 @@ class ClassesScreen:
         await self.refresh()
 
     async def _add_student(self, e):
-        if not self.selected_class:
+        if not self.selected_class or not self._book_ready():
             return
         try:
             await asyncio.to_thread(tasks.scorebook.add_student, self.selected_class["id"],
@@ -385,11 +401,13 @@ class ClassesScreen:
         open_in_explorer(path, select=True)
 
     async def _export_all(self, e):
+        if not self._book_ready():
+            return
         rows = await asyncio.to_thread(tasks.scorebook.results)
         await self._export(rows, "Exam results.xlsx")
 
     async def _export_class(self, e):
-        if not self.selected_class:
+        if not self.selected_class or not self._book_ready():
             return
         rows = await asyncio.to_thread(tasks.scorebook.results, None, self.selected_class["id"])
         await self._export(rows, f"{self.selected_class['name']} results.xlsx")

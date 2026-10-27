@@ -20,6 +20,11 @@ cambridge_files = solve_detect = marker = scorebook = reports = None
 
 def load_backend():
     global reader, parser, renamer, scraper, cambridge_files, solve_detect, marker, scorebook, reports
+    # The score book doesn't need the subject list, so Classes still works if that download fails
+    import src.scorebook as scorebook_module
+    import src.reports as reports_module
+    scorebook, reports = scorebook_module, reports_module
+    scorebook.ensure_folders()
     import src.reader as reader_module
     import src.parser as parser_module
     import src.renamer as renamer_module
@@ -27,12 +32,8 @@ def load_backend():
     import src.cambridge_files as files_module
     import src.solve_detect as solve_module
     import src.marker as marker_module
-    import src.scorebook as scorebook_module
-    import src.reports as reports_module
     reader, parser, renamer, scraper = reader_module, parser_module, renamer_module, scraper_module
     cambridge_files, solve_detect, marker = files_module, solve_module, marker_module
-    scorebook, reports = scorebook_module, reports_module
-    scorebook.ensure_folders()
 
 
 def refresh_subject_list():
@@ -71,7 +72,8 @@ def analyse(pdf_path):
 
 def place(pdf_path, metadata, destination, keep_original):
     """
-    Sort one exam into the destination and return the path it ended up at.
+    Sort one exam into the destination. Returns (the path it ended up at, True if the
+    original should have been removed but couldn't be).
 
     The file is first copied into a staging folder inside the destination, so
     renamer.rename always moves within the same drive (os.rename can't move
@@ -93,9 +95,13 @@ def place(pdf_path, metadata, destination, keep_original):
     new_files = set(os.listdir(folder)) - files_before
     final_path = os.path.join(folder, new_files.pop()) if new_files else folder
 
+    original_left = False
     if not keep_original:
-        os.remove(pdf_path)
-    return final_path
+        try:
+            os.remove(pdf_path)
+        except OSError:
+            original_left = True  # open in another program: the sorted copy is already in place, the original just stays
+    return final_path, original_left
 
 
 def remove_staging_folder(destination):
@@ -176,13 +182,22 @@ def check_paper(pdf_path, metadata, student=None, class_name=None, key_override=
     return {"marking": marking, "grade": grade, "marked_pdf": marked_path, "mark_scheme": mark_scheme}
 
 
-def file_for_student(marked_path, marking, metadata, student, class_name, grade=None):
-    """The student was chosen after checking: move the marked PDF and its report into their folder."""
+def file_for_student(marked_path, marking, metadata, student, class_name, grade=None, source_pdf=None):
+    """
+    The student was chosen (or changed) after checking: move the marked PDF and its report into
+    their folder, with their name on them. source_pdf is the student's own paper, to redo the marked copy.
+    """
     if not (student and class_name):
         return marked_path
     new_path = folders.move_into(marked_path, folders.class_folder(class_name, student))
     if new_path and os.path.exists(new_path):
-        folders.write_report(new_path, marking, metadata, student, class_name, grade)
+        try:
+            if source_pdf and new_path != marked_path:
+                reports.marked_pdf(source_pdf, marking, new_path, title=paper_heading(metadata),
+                                   student=student, grade=grade)
+            folders.write_report(new_path, marking, metadata, student, class_name, grade)
+        except Exception:
+            pass  # already moved, so the new place is still returned (the cover may keep the old name)
     return new_path
 
 

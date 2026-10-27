@@ -167,25 +167,29 @@ def mark(student_pdf, mark_scheme_pdf, metadata, key_override=None):
         raise MarkingError("No AI key has been set up. Add a free Gemini key in Settings.")
 
     body = _build_request(student_pdf, mark_scheme_pdf, metadata)
-    response = None
+    response = busy = None
     # Busy hours on the free tier can turn every model away for a short while: after a full round
-    # of "busy" answers, wait 45 seconds and go round once more before giving up
+    # of "busy" answers, wait 45 seconds and go round once more before giving up. Any busy model
+    # counts, since a retired model at the end of the list answers "not found" instead
     for attempt_round in range(2):
         if attempt_round == 1:
-            if response.status_code not in OVERLOADED | {429}:
+            if busy is None:
                 break
             time.sleep(45)
+        busy = None
         for model in MODELS:
             response = _call(model, body, key)
             if response.status_code in OVERLOADED:  # briefly overloaded: wait and try once more
                 time.sleep(8)
                 response = _call(model, body, key)
+            if response.status_code in OVERLOADED | {429}:
+                busy = response
             if response.status_code not in TRY_NEXT_MODEL:
                 break
         if response.status_code == 200:
             break
     if response.status_code != 200:
-        raise MarkingError(_friendly_http_error(response))
+        raise MarkingError(_friendly_http_error(busy if busy is not None else response))
 
     data = response.json()
     candidates = data.get("candidates") or []
@@ -207,6 +211,8 @@ def mark(student_pdf, mark_scheme_pdf, metadata, key_override=None):
 
     total = sum(q["marks_awarded"] for q in questions)
     max_total = sum(q["max_marks"] for q in questions)
+    if not questions or max_total <= 0:  # nothing was marked: never save a 0 / 0 score
+        raise MarkingError("The AI checker didn't mark any questions. Please try again.")
     paper_total = int(result.get("paper_total_marks") or max_total)
     return {
         "questions": questions,

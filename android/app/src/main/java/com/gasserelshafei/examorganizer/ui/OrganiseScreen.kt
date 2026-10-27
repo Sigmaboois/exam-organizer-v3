@@ -116,7 +116,7 @@ fun OrganiseScreen(state: AppState, wide: Boolean) {
                 ExamRow(item,
                     onFix = { editing = item.id },
                     onCheck = { state.sendToCheck(item.id) },
-                    onOpen = { (state.viewIntent(item.sortedTo, item.file))?.let { runCatching { context.startActivity(it) } } },
+                    onOpen = { state.open(context, item.sortedTo, item.file) },
                     onRemove = { state.removeExam(item.id) })
             }
         }

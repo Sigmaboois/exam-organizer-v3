@@ -8,7 +8,8 @@ def organize_exam(pdf_path,root_path):
     pdf_extracted = reader.read_file(pdf_path)
     metadata = parser.identify(pdf_extracted, pdf_path)
     folder_path = renamer.folder_create(metadata,root_path)
-    renamer.rename(metadata,pdf_path,folder_path)
+    # Copy, so the original stays put (os.rename would move it, and fails across drives)
+    renamer.copy(metadata,pdf_path,folder_path)
 
 if __name__ == "__main__":
     print("This is a test\n")

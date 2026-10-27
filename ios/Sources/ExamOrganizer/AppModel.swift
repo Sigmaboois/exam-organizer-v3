@@ -86,6 +86,7 @@ struct ExamItem: Identifiable {
     var answers: SolveResult?
     var checkingAnswers = false
     var sortedTo: URL?
+    var sortedInto: Destination?    // a picked folder must be opened again to read sortedTo
 }
 
 @MainActor
@@ -174,7 +175,10 @@ final class OrganiseModel: ObservableObject {
     func sendToCheck(_ id: UUID) {
         guard let item = items.first(where: { $0.id == id }), let app else { return }
         let source = item.sortedTo ?? item.file
-        guard let copy = try? AppPaths.importCopy(of: source, name: item.name) else {
+        let copy = try? (item.sortedInto ?? .library).withAccess { _ in
+            try AppPaths.importCopy(of: source, name: item.name)
+        }
+        guard let copy else {
             app.showToast("Couldn't copy this paper.", error: true)
             return
         }
@@ -259,6 +263,7 @@ final class OrganiseModel: ObservableObject {
                 update(item.id) { item in
                     item.status = .sorted
                     item.sortedTo = url
+                    item.sortedInto = destination
                 }
                 sorted += 1
             case .failure(let error):
@@ -606,6 +611,15 @@ final class CheckModel: ObservableObject {
 
     /// Save a checked paper to its student's scores (replacing an earlier save of the same paper).
     func save(_ id: UUID, quiet: Bool = false) {
+        // The student (or their class) was deleted after the paper was assigned: ask again, don't save under nobody
+        if let paper = find(id), let studentID = paper.studentID, scoreBook.student(studentID) == nil {
+            update(id) { item in
+                item.studentID = nil
+                item.resultID = nil   // deleted along with the student
+            }
+            app?.showToast("That student was deleted. Choose whose paper \(paper.name) is.", error: true)
+            return
+        }
         moveIntoStudentFolder(id)
         guard let paper = find(id), let outcome = paper.outcome, let studentID = paper.studentID,
               let metadata = paper.metadata else { return }
@@ -644,6 +658,10 @@ final class CheckModel: ObservableObject {
             marking.complete = marking.maxTotal == thresholds.maxMark
         }
         let studentName = scoreBook.student(paper.studentID)?.name
+        // Renaming a class or student moves its folders, so redraw the saved copy where it is now
+        if let record = scoreBook.results.first(where: { $0.id == paper.resultID }), let path = record.markedPDF {
+            outcome.markedPDF = AppPaths.documents.appendingPathComponent(path)
+        }
         let output = outcome.markedPDF
         let file = paper.file
         let finalMarking = marking

@@ -65,14 +65,35 @@ def add_class(name, qualification=None):
     return cursor.lastrowid
 
 
-def _move_paths(db, old_folder, new_folder):
-    """Folders were renamed: point the saved results at the files' new place."""
-    old_prefix = os.path.join(old_folder, "")
-    new_prefix = os.path.join(new_folder, "")
+def _move_paths(db, moves):
+    """Folders were renamed: point the saved results at where each file really went (maybe 'name (2)')."""
     for row in db.execute("SELECT id, marked_pdf FROM results WHERE marked_pdf IS NOT NULL").fetchall():
         path = row["marked_pdf"]
-        if os.path.normcase(path).startswith(os.path.normcase(old_prefix)):
-            db.execute("UPDATE results SET marked_pdf = ? WHERE id = ?", (new_prefix + path[len(old_prefix):], row["id"]))
+        for source, target in moves:
+            old_prefix = os.path.join(source, "")
+            if os.path.normcase(path) == os.path.normcase(source):
+                new_path = target
+            elif os.path.normcase(path).startswith(os.path.normcase(old_prefix)):
+                new_path = os.path.join(target, path[len(old_prefix):])
+            else:
+                continue
+            db.execute("UPDATE results SET marked_pdf = ? WHERE id = ?", (new_path, row["id"]))
+            break
+
+
+def _rename_folder(db, old_folder, new_folder):
+    """Rename the folder along with the score book. If either fails, the files and the name stay as they were."""
+    try:
+        moves = folders.rename_folder(old_folder, new_folder)
+    except OSError as error:
+        raise ValueError(f'Couldn\'t rename the folder "{os.path.basename(old_folder)}": a file in it is open in '
+                         "another program (maybe a marked PDF). Close it and try again.") from error
+    try:
+        _move_paths(db, moves)
+        db.commit()
+    except BaseException:
+        folders.undo_moves(moves)
+        raise
 
 
 def rename_class(class_id, name):
@@ -88,8 +109,7 @@ def rename_class(class_id, name):
         if old:
             old_folder = folders.class_folder(old["name"], create=False)
             new_folder = folders.class_folder(name, create=False)
-            folders.rename_folder(old_folder, new_folder)
-            _move_paths(db, old_folder, new_folder)
+            _rename_folder(db, old_folder, new_folder)
 
 
 def ensure_folders():
@@ -161,8 +181,7 @@ def rename_student(student_id, name):
         if old:
             old_folder = folders.class_folder(old["class_name"], old["student_name"], create=False)
             new_folder = folders.class_folder(old["class_name"], name, create=False)
-            folders.rename_folder(old_folder, new_folder)
-            _move_paths(db, old_folder, new_folder)
+            _rename_folder(db, old_folder, new_folder)
 
 
 def delete_student(student_id):
@@ -203,6 +222,13 @@ def update_result(result_id, marking, grade=None, marked_pdf=None):
         db.execute("""UPDATE results SET score = ?, max_score = ?, grade = ?, details = ?, marked_pdf = ?
                       WHERE id = ?""",
                    (marking["total"], marking["max_total"], grade, json.dumps(marking), marked_pdf, result_id))
+
+
+def marked_pdf_of(result_id):
+    """Where a saved result's marked PDF is now (renaming a class or student moves it)."""
+    with connect() as db:
+        row = db.execute("SELECT marked_pdf FROM results WHERE id = ?", (result_id,)).fetchone()
+    return row["marked_pdf"] if row else None
 
 
 def delete_result(result_id):

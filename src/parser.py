@@ -65,6 +65,17 @@ def detect_paper_type(text):
     return None
 
 
+def looks_like_question_paper(text):
+    """
+    A question paper asks for candidate details or says how to answer ("Answer all questions", [3]).
+    Pre-release material and other companion files share its footer code, so they aren't taken for one.
+    """
+    if not text or re.search(r"PRE\W?RELEASE", text[:3000]):
+        return False
+    return bool(re.search(r"candidate\s*number|centre\s*number|\[\d{1,2}\]"
+                          r"|\banswer\s+(?:all|any|both|one|two|three|four|five|either|question)", text, re.I))
+
+
 def _fill_series_gaps(metadata, text):
     """Grade thresholds and examiner reports name the syllabus and the series, not one paper."""
     if not text:
@@ -156,7 +167,9 @@ def identify(text, filename=None):
             metadata[key] = value
     if file_meta.get("paper_type") and not explicit:
         metadata["paper_type"] = file_meta["paper_type"]
-    if not metadata.get("paper_type") and metadata.get("subject_code") and metadata.get("paper"):
+    # An unknown type stays unknown unless the text reads like a question paper
+    if (not metadata.get("paper_type") and metadata.get("subject_code") and metadata.get("paper")
+            and looks_like_question_paper(text)):
         metadata["paper_type"] = "QP"
     fill_subject(metadata)
     return metadata
@@ -189,6 +202,9 @@ def complete_manual(fields):
     metadata["paper"] = (fields.get("paper") or "").strip() or None
     metadata["variant"] = (fields.get("variant") or "").strip() or None
     metadata["paper_type"] = fields.get("paper_type") or None
+    # The code becomes a folder name, so anything but 4 digits ("C:\x", "06/25") would break the path
+    if metadata["subject_code"] and not re.fullmatch(r"\d{4}", metadata["subject_code"]):
+        return metadata, "Subject code should be 4 digits, like 0625."
     if metadata["year"] and not re.fullmatch(r"\d{4}", metadata["year"]):
         return metadata, "Year should be 4 digits, like 2024."
     if metadata["paper"] and not re.fullmatch(r"\d", metadata["paper"]):

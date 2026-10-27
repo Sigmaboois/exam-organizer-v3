@@ -58,7 +58,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -72,11 +72,9 @@ import androidx.compose.ui.window.DialogProperties
 import com.gasserelshafei.examorganizer.AppState
 import com.gasserelshafei.examorganizer.CheckPaper
 import com.gasserelshafei.examorganizer.PaperStatus
-import com.gasserelshafei.examorganizer.friendlyMessage
 import com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanning
 import com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult
-import kotlinx.coroutines.launch
 
 private tailrec fun Context.activity(): Activity? = when (this) {
     is Activity -> this
@@ -115,8 +113,9 @@ fun CheckScreen(state: AppState, wide: Boolean) {
         }
     }
     // Backup for phones without Google's scanner: photos one page at a time with the camera app
-    var pendingPhoto by remember { mutableStateOf<java.io.File?>(null) }
-    var showPhotoPages by remember { mutableStateOf(false) }
+    // (saveable: the phone may turn or recreate the app while the camera app is open)
+    var pendingPhoto by rememberSaveable { mutableStateOf<java.io.File?>(null) }
+    var showPhotoPages by rememberSaveable { mutableStateOf(false) }
     val takePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { taken ->
         val file = pendingPhoto
         if (taken && file != null && file.length() > 0) state.photoPages += file else file?.delete()
@@ -322,13 +321,12 @@ private fun CheckRow(state: AppState, paper: CheckPaper, busy: Boolean, onFix: (
 @Composable
 private fun ResultsDialog(state: AppState, id: String, onDismiss: () -> Unit) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val paper = state.paper(id) ?: return onDismiss()
     val outcome = paper.outcome ?: return onDismiss()
     val marking = outcome.marking
     val awards = remember(marking) { mutableStateListOf<Int>().apply { addAll(marking.questions.map { it.marksAwarded }) } }
     val changed = awards.toList() != marking.questions.map { it.marksAwarded }
-    var saving by remember { mutableStateOf(false) }
+    val saving = id in state.revising
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Scaffold(topBar = {
@@ -336,15 +334,9 @@ private fun ResultsDialog(state: AppState, id: String, onDismiss: () -> Unit) {
                 title = { Text(paper.metadata?.title ?: "Results", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = { IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "Close") } },
                 actions = {
-                    TextButton(enabled = changed && !saving, onClick = {
-                        saving = true
-                        scope.launch {
-                            runCatching { state.revise(id, awards.toList()) }
-                                .onSuccess { state.show("Corrections saved.") }
-                                .onFailure { state.show(friendlyMessage(it), true) }
-                            saving = false
-                        }
-                    }) { Text(if (saving) "Saving…" else "Save corrections") }
+                    TextButton(enabled = changed && !saving, onClick = { state.saveCorrections(id, awards.toList()) }) {
+                        Text(if (saving) "Saving…" else "Save corrections")
+                    }
                 },
             )
         }) { padding ->
@@ -369,9 +361,9 @@ private fun ResultsDialog(state: AppState, id: String, onDismiss: () -> Unit) {
                             color = Warn, fontWeight = FontWeight.SemiBold)
                         if (marking.teacherAdjusted) Note("Marks adjusted by you.")
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedButton(onClick = {
-                                state.viewIntent(outcome.savedPdf, outcome.local)?.let { runCatching { context.startActivity(it) } }
-                            }) { Icon(Icons.Outlined.PictureAsPdf, null); Text("  Open marked copy") }
+                            OutlinedButton(onClick = { state.open(context, outcome.savedPdf, outcome.local) }) {
+                                Icon(Icons.Outlined.PictureAsPdf, null); Text("  Open marked copy")
+                            }
                             OutlinedButton(onClick = { context.startActivity(state.shareIntent(outcome.local, "application/pdf")) }) {
                                 Icon(Icons.Outlined.Share, null); Text("  Share")
                             }

@@ -26,7 +26,7 @@ step "Copying the project into Ubuntu..."
 SRC="$(pwd)/"
 DST=/root/ExamOrganizerAndroid/
 mkdir -p "$DST"
-rsync -a --delete --exclude build --exclude .gradle --exclude .kotlin --exclude logs "$SRC" "$DST" \
+rsync -a --delete --exclude build --exclude .gradle --exclude .kotlin --exclude logs --exclude app/libs "$SRC" "$DST" \
   || fail "Couldn't copy the project."
 
 # Build your Gemini key in, from the desktop app's src/api_key.py (never printed, never committed)
@@ -45,6 +45,13 @@ else
 fi
 
 cd "$DST"
+# The WhatsApp link for online lessons is written in Go: build it when it changed
+AAR=app/libs/wabridge.aar
+if [ ! -f "$AAR" ] || [ -n "$(find wabridge -newer "$AAR" \( -name '*.go' -o -name 'go.mod' \) | head -1)" ]; then
+  step "Building the WhatsApp link (Go, about a minute)..."
+  bash scripts/build-wabridge.sh || fail "Building the WhatsApp link failed (see above). Is Go installed in Ubuntu?"
+fi
+
 if [ "$MODE" = test ] || [ "$MODE" = test-only ]; then
   [ -d /root/corpus ] || fail "No test papers in /root/corpus."
   step "Testing paper detection on the real Cambridge papers..."

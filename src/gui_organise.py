@@ -100,7 +100,7 @@ class ExamFile:
         elif self.status == "sorted":
             self.icon_slot.content = ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN_600, size=22)
             self.note.visible = True
-            self.note.value = "Sorted ✓"
+            self.note.value = "Sorted ✓" + (f" - {self.message}" if self.message else "")
             self.note.color = ft.Colors.GREEN_700
             self.action.icon = ft.Icons.FOLDER_OPEN
             self.action.tooltip = "Show in folder"
@@ -423,10 +423,11 @@ class OrganiseScreen:
             exam.render()
             self.app.page.update()
             try:
-                exam.sorted_path = await asyncio.to_thread(
+                exam.sorted_path, original_left = await asyncio.to_thread(
                     tasks.place, exam.path, exam.metadata, destination, self.keep_original)
                 exam.status = "sorted"
-                exam.message = ""
+                exam.message = ("original still in place, it may be open in another program"
+                                if original_left else "")
                 sorted_count += 1
             except Exception as error:
                 exam.status = "skipped"

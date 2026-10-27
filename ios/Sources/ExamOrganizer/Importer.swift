@@ -113,8 +113,13 @@ enum Importer {
     static func copyIncoming(_ url: URL) -> URL? {
         let allowed = url.startAccessingSecurityScopedResource()
         defer { if allowed { url.stopAccessingSecurityScopedResource() } }
-        guard url.pathExtension.lowercased() == "pdf" else { return nil }
-        return try? AppPaths.importCopy(of: url)
+        guard url.pathExtension.lowercased() == "pdf", let copy = try? AppPaths.importCopy(of: url) else { return nil }
+        // Files from Mail, AirDrop… arrive as iOS's own copy in Documents/Inbox, which would pile up in Files
+        let inbox = AppPaths.documents.appendingPathComponent("Inbox", isDirectory: true).resolvingSymlinksInPath().path
+        if url.resolvingSymlinksInPath().path.hasPrefix(inbox + "/") {
+            try? FileManager.default.removeItem(at: url)
+        }
+        return copy
     }
 
     static func summary(_ outcome: Outcome, addedTo place: String) -> String {

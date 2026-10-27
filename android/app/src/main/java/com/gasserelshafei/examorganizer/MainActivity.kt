@@ -12,6 +12,11 @@ import com.gasserelshafei.examorganizer.ui.ExamOrganizerTheme
 import com.gasserelshafei.examorganizer.ui.ExamOrganizerUi
 
 class MainActivity : ComponentActivity() {
+    companion object {
+        /** Set by the "lesson link sent" notifications. */
+        const val OPEN_LESSONS = "open_lessons"
+    }
+
     private val state: AppState by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -28,6 +33,7 @@ class MainActivity : ComponentActivity() {
 
     /** PDFs shared to the app (Share / Open with) from Files, WhatsApp, Gmail, notes apps… */
     private fun handle(intent: Intent?) {
+        if (intent?.getBooleanExtra(OPEN_LESSONS, false) == true) state.screen = Screen.LESSONS
         val uris: List<Uri> = when (intent?.action) {
             Intent.ACTION_VIEW -> listOfNotNull(intent.data)
             Intent.ACTION_SEND -> listOfNotNull(

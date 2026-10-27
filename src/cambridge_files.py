@@ -190,11 +190,15 @@ def component_thresholds(metadata, near=None):
 
 
 def grade_for(score, max_score, thresholds_max, thresholds):
-    """Scale the score to the threshold paper's max mark and return the grade letter."""
+    """
+    Return the grade letter for a raw score. thresholds_max is the paper's real maximum raw mark,
+    so the score isn't scaled by the AI's own total: that is too low when blank parts were left out
+    (they score 0 anyway) and too high when both optional questions were listed.
+    """
     if not thresholds or max_score <= 0:
         return None
-    scaled = score * thresholds_max / max_score
+    raw = min(score, thresholds_max)
     for letter, minimum in thresholds.items():
-        if scaled >= minimum:
+        if raw >= minimum:
             return letter
     return "U"

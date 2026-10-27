@@ -3,7 +3,7 @@
 The iPad (and iPhone) version of Exam Organizer, written in SwiftUI and built with
 [xtool](https://github.com/xtool-org/xtool), so it can be built on Windows without a Mac.
 
-It does everything the desktop app does:
+It supports paper organisation, checking and class records:
 
 | Screen | What it does |
 |---|---|
@@ -49,3 +49,12 @@ their own free key in Settings.
 
 With a free Apple ID the app works for 7 days, then needs `xtool dev` again. To give it to
 other teachers properly (TestFlight or the App Store) you need Apple's paid developer account.
+
+### Developer Mode setup
+
+All launchers now use the same install flow, including `install-iphone-ready-v2.ps1`.
+If Developer Mode is disabled or hidden, the installer requests `idevicedevmodectl reveal`
+for the connected device and continues to the normal xtool development install attempt.
+On the device, open **Settings > Privacy & Security > Developer Mode**, enable it,
+restart, unlock and confirm **Enable**. Then run `install-iphone.cmd` again if needed.
+This exposes the setting when supported; it does not bypass the device confirmation.

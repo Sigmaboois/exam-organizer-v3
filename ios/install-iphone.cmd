@@ -1,5 +1,7 @@
 @echo off
-rem Double-click to build Exam Organizer and install it on the plugged-in iPhone.
+rem Build and install on the connected iPhone/iPad. Keep the result visible.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0install-iphone.ps1" %*
+set "INSTALL_RESULT=%ERRORLEVEL%"
 echo.
 pause
+exit /b %INSTALL_RESULT%

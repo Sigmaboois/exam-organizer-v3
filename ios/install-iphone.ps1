@@ -1,4 +1,4 @@
-# Builds Exam Organizer and installs it on the plugged-in iPhone, step by step, with a log.
+﻿# Builds Exam Organizer and installs it on the plugged-in iPhone, step by step, with a log.
 # Double-click install-iphone.cmd, or run:  powershell -ExecutionPolicy Bypass -File ios\install-iphone.ps1
 # Add "debug" at the end for a debug build. Logs are saved in ios\logs\.
 
@@ -20,7 +20,7 @@ function Fail($text) {
     exit 1
 }
 
-Log "Exam Organizer iPhone installer" "Cyan"
+Log "Exam Organizer iPhone/iPad installer" "Cyan"
 Log "Log file: $logFile"
 
 # 1. WSL with Ubuntu
@@ -32,7 +32,7 @@ Log "      OK: Ubuntu is installed." "Green"
 # 2. WSL networking: VirtioProxy reaches both the internet and Apple's iPhone service
 Log "[2/5] Checking WSL networking..." "Cyan"
 $config = Join-Path $env:USERPROFILE ".wslconfig"
-if (-not (Test-Path $config) -or -not (Select-String -Path $config -Pattern "networkingMode=VirtioProxy" -Quiet)) {
+if (-not (Test-Path $config) -or -not (Select-String -Path $config -Pattern "^\s*networkingMode\s*=\s*VirtioProxy\s*(?:[#;].*)?$" -Quiet)) {
     Fail "$config must contain networkingMode=VirtioProxy under [wsl2]. Fix it, run 'wsl --shutdown', then try again."
 }
 Log "      OK: networkingMode=VirtioProxy." "Green"

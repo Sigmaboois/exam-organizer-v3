@@ -181,7 +181,7 @@ fun ReportDialog(state: AppState, path: String?, fallback: () -> String, onDismi
         },
         confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
         dismissButton = {
-            if (path != null) TextButton(onClick = { state.shareSaved(path, "text/plain")?.let(context::startActivity) }) {
+            if (path != null) TextButton(onClick = { state.shareSaved(context, path, "text/plain") }) {
                 Icon(Icons.Outlined.Share, null)
                 Text(" Share")
             }
@@ -238,6 +238,9 @@ fun HelpDialog(onDismiss: () -> Unit) {
                 Text("Classes", style = MaterialTheme.typography.titleSmall)
                 Text("Add classes and students, or paste a class list. Each class has a folder with one per student. Each class shows " +
                     "its average, its grades and the topics to revise, and exports to a spreadsheet.")
+                Text("Lessons", style = MaterialTheme.typography.titleSmall)
+                Text("Link your WhatsApp once, then give each class its Zoom link, WhatsApp group and lesson times. Before " +
+                    "every lesson the link is sent to the group by itself, even with the app closed and the phone locked.")
                 Note("Works with Cambridge (CAIE) IGCSE, O Level and AS & A Level. Only question papers can be checked.")
             }
         },

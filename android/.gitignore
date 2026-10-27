@@ -9,6 +9,8 @@ build/
 .cxx
 # Installer logs
 logs/
+# Built from wabridge/ by scripts/build-wabridge.sh
+app/libs/
 
 # The root .gitignore skips folders called "test"; the detection tests belong in the repo
 !app/src/test/

@@ -27,6 +27,7 @@ class CheckPaper:
         self.progress_text = ""
         self.result = None        # dict from app_tasks.check_paper
         self.saved = False
+        self.saved_to = None      # the student it was saved to
         self.result_id = None     # score book row, replaced if the paper is checked again
 
         self.icon_slot = ft.Container(width=28, alignment=ft.Alignment.CENTER)
@@ -77,9 +78,14 @@ class CheckPaper:
         value = self.student.value
         return int(value) if value and value != NO_STUDENT else None
 
+    @property
+    def needs_saving(self):
+        """Checked, and the chosen student isn't the one it was saved to (or it isn't saved yet)."""
+        return self.status == "done" and bool(self.student_id) and (not self.saved or self.student_id != self.saved_to)
+
     async def _student_chosen(self, e):
-        # Already checked but not saved yet: save it to the chosen student now
-        if self.status == "done" and not self.saved and self.student_id:
+        # Already checked: save it to the chosen student now, moving it from the student it was saved to
+        if self.needs_saving:
             await self.screen.save(self)
         self.render()
         self.screen.app.page.update()
@@ -373,7 +379,7 @@ class CheckScreen:
                 continue
             paper.student.value = value
             assigned += 1
-            if paper.status == "done" and not paper.saved and paper.student_id:
+            if paper.needs_saving:
                 await self.save(paper, quiet=True)
             paper.render()
         self.refresh_summary()
@@ -454,24 +460,40 @@ class CheckScreen:
 
     async def save(self, paper, quiet=False):
         result = paper.result
-        # Checked before the student was chosen: move the marked PDF and mistakes into their class folder
+        # Checked before the student was chosen, or given to another student: move the marked PDF and
+        # mistakes into their class folder
         student_name, class_name = self.student_names.get(paper.student_id, (None, None))
+        marked_pdf = await self._current_marked_pdf(paper)
         try:
             result["marked_pdf"] = await asyncio.to_thread(
-                tasks.file_for_student, result.get("marked_pdf"), result["marking"], paper.metadata,
-                student_name, class_name, result.get("grade"))
+                tasks.file_for_student, marked_pdf, result["marking"], paper.metadata,
+                student_name, class_name, result.get("grade"), paper.path)
         except OSError:
-            pass  # the file is open somewhere; the score is still saved
-        if paper.result_id:  # checked again: replace the old score instead of adding a second one
+            if paper.saved:  # moving it to another student: keep the score and files together with the first one
+                paper.student.value = str(paper.saved_to)
+                self.app.toast("Couldn't move the marked PDF, it's open in another program. Close it and choose "
+                               "the student again.", error=True)
+                return
+            # the file is open somewhere; the score is still saved
+        if paper.result_id:  # checked again or moved: replace the old score instead of adding a second one
             await asyncio.to_thread(tasks.scorebook.delete_result, paper.result_id)
         paper.result_id = await asyncio.to_thread(
             tasks.scorebook.save_result, paper.student_id, paper.metadata, result["marking"],
             result.get("grade"), result.get("marked_pdf"), paper.path)
         paper.saved = True
+        paper.saved_to = paper.student_id
         if not quiet:
             name, _ = self.student_names.get(paper.student_id, ("the student", None))
             self.app.toast(f"Saved to {name}'s scores.")
             await self.app.classes.refresh()
+
+    async def _current_marked_pdf(self, paper):
+        """The saved marked PDF's path now: renaming its class or student moves it, and the score book follows."""
+        if paper.saved and paper.result_id:
+            path = await asyncio.to_thread(tasks.scorebook.marked_pdf_of, paper.result_id)
+            if path:
+                paper.result["marked_pdf"] = path
+        return paper.result.get("marked_pdf")
 
     # ---------- results ----------
 
@@ -529,8 +551,8 @@ class CheckScreen:
             extra.append(ft.Text("Please double-check: " + ", ".join(marking["needs_review"]), size=13,
                                  color=ft.Colors.AMBER_900, weight=ft.FontWeight.W_600))
 
-        def open_marked(e):
-            open_in_explorer(result["marked_pdf"])
+        async def open_marked(e):
+            open_in_explorer(await self._current_marked_pdf(paper))
 
         save_button = ft.FilledButton("Save corrections", icon=ft.Icons.SAVE_OUTLINED)
 
@@ -548,10 +570,13 @@ class CheckScreen:
                 awards.append(awarded)
             save_button.disabled = True
             self.app.page.update()
-            student_name, class_name = self.student_names.get(paper.student_id, (None, None))
+            # The marked copy belongs to the student it's saved to
+            student_name, class_name = self.student_names.get(
+                paper.saved_to if paper.saved else paper.student_id, (None, None))
+            marked_pdf = await self._current_marked_pdf(paper)  # not the old folder, if renamed since
             try:
                 updated, grade, marked_path = await asyncio.to_thread(
-                    tasks.revise_marks, paper.path, paper.metadata, marking, awards, result["marked_pdf"],
+                    tasks.revise_marks, paper.path, paper.metadata, marking, awards, marked_pdf,
                     student_name, result.get("grade"), class_name)
             except Exception as error:
                 save_button.disabled = False

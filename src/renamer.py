@@ -2,6 +2,7 @@ import src.parser as parser
 import src.reader as reader 
 
 import os
+import shutil
 
 SERIES_FOLDERS = {
     "GT": "Grade thresholds",
@@ -55,13 +56,24 @@ def rename(metadata,file,folder_path):
         raise FileExistsError(f"An exam is already sorted at: {new_name}")
     os.rename(file,new_name)
 
+def copy(metadata,file,folder_path):
+    """Like rename, but the original stays where it is (works across drives too)."""
+    new_name = os.path.join(folder_path, file_name(metadata))
 
-    
+    # Never overwrite an exam that is already sorted
+    if os.path.exists(new_name):
+        raise FileExistsError(f"An exam is already sorted at: {new_name}")
+    shutil.copy2(file,new_name)
+    return new_name
+
+
+
 if __name__ == "__main__":
     print("This is a test\n")
     pdfpath = input("Please input ur test file path:")
+    destination = input("Please input the folder to sort it into:")
     file_extracted = reader.read_file(pdfpath)
     metadata_parsed=parser.identify(file_extracted, pdfpath)
-    folder_path = folder_create(metadata_parsed)
-    rename(metadata_parsed,pdfpath,folder_path)
+    folder_path = folder_create(metadata_parsed,destination)
+    print(copy(metadata_parsed,pdfpath,folder_path))
     

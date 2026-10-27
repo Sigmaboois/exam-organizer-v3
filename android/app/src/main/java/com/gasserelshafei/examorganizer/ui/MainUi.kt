@@ -12,6 +12,7 @@ import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.VideoCall
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -30,6 +31,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -41,6 +43,7 @@ private fun Screen.icon(): ImageVector = when (this) {
     Screen.ORGANISE -> Icons.Outlined.Folder
     Screen.CHECK -> Icons.Outlined.FactCheck
     Screen.CLASSES -> Icons.Outlined.Groups
+    Screen.LESSONS -> Icons.Outlined.VideoCall
 }
 
 /** Phones: tabs along the bottom. Tablets: a rail down the side. */
@@ -48,7 +51,7 @@ private fun Screen.icon(): ImageVector = when (this) {
 fun ExamOrganizerUi(state: AppState) {
     val wide = LocalConfiguration.current.screenWidthDp >= 600
     val snackbar = remember { SnackbarHostState() }
-    var showSettings by remember { mutableStateOf(false) }
+    var showSettings by rememberSaveable { mutableStateOf(false) }
     var showHelp by remember { mutableStateOf(false) }
 
     LaunchedEffect(state.toast) {
@@ -89,6 +92,7 @@ fun ExamOrganizerUi(state: AppState) {
                     Screen.ORGANISE -> OrganiseScreen(state, wide)
                     Screen.CHECK -> CheckScreen(state, wide)
                     Screen.CLASSES -> ClassesScreen(state, wide)
+                    Screen.LESSONS -> LessonsScreen(state, wide)
                 }
             }
         }

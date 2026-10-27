@@ -47,6 +47,8 @@ android {
         jvmTarget = "17"
     }
     packaging {
+        // The WhatsApp bridge is a large native library: keep it compressed in the APK
+        jniLibs { useLegacyPackaging = true }
         resources {
             excludes += setOf("META-INF/DEPENDENCIES", "META-INF/LICENSE*", "META-INF/NOTICE*", "META-INF/*.kotlin_module")
         }
@@ -76,6 +78,10 @@ dependencies {
     // Google's document scanner (camera, edge detection, PDF) and on-device text recognition
     implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0-beta1")
     implementation("com.google.mlkit:text-recognition:16.0.1")
+
+    // Online lessons: the WhatsApp link (wabridge/, built by scripts/build-wabridge.sh) and QR codes
+    implementation(files("libs/wabridge.aar"))
+    implementation("com.google.zxing:core:3.5.3")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.apache.pdfbox:pdfbox:2.0.32")
